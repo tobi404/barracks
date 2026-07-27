@@ -55,13 +55,21 @@ type Owner struct {
 	Command    string `yaml:"command,omitempty"`
 }
 
-// FormatVersion is the lease record format this build writes.
+// FormatVersion is the lease record format this build writes. Version 1 is the
+// original record and is written without the field at all, so a lease loaded
+// with Version 0 is a version-1 record.
 //
-// Version 1 is the original record and is written without the field at all, so
-// a lease loaded with Version 0 is a version-1 record. Every reader must decide
-// what an older record means for it rather than assuming the current shape; see
-// Lease.HasProvenance for the one case that exists today.
+// Nothing may ask whether a record is *current*; bumping this for one new field
+// would then declare every other field missing from every record on disk. A
+// reader asks whether a record is new enough to carry the field it wants, by
+// comparing against the version that field landed in - provenanceSince below,
+// and one such constant per field added from here on.
 const FormatVersion = 2
+
+// provenanceSince is the record version Lease.Sources was introduced in. It is
+// deliberately not FormatVersion: the two are equal today and must be free to
+// diverge the moment an unrelated field bumps the format.
+const provenanceSince = 2
 
 // SourceRef records one source a spawn was materialised from.
 //
@@ -113,8 +121,9 @@ type Lease struct {
 
 	Links []Link `yaml:"links"`
 	// Sources are the sources this spawn was materialised from, independently of
-	// which of them still contribute a link. Empty on a version-1 record, which
-	// is not the same as "carries nothing" - see HasProvenance.
+	// which of them still contribute a link. Empty on a record older than
+	// provenanceSince, which is not the same as "carries nothing" - see
+	// HasProvenance.
 	Sources []SourceRef `yaml:"sources,omitempty"`
 	// CreatedDirs are directories barracks made and may remove if they end up
 	// empty again. Deepest last.
@@ -125,10 +134,11 @@ type Lease struct {
 // HasProvenance reports whether Sources can be trusted as the complete set of
 // sources this spawn was made from.
 //
-// A version-1 record has no Sources field, and reading its absence as an empty
-// set would say the spawn came from nothing. Callers must fall back to whatever
-// they did before - for upgrade, inspecting the links - rather than act on it.
-func (l *Lease) HasProvenance() bool { return l.Version >= FormatVersion }
+// A record older than provenanceSince has no Sources field, and reading its
+// absence as an empty set would say the spawn came from nothing. Callers must
+// fall back to whatever they did before - for upgrade, inspecting the links -
+// rather than act on it.
+func (l *Lease) HasProvenance() bool { return l.Version >= provenanceSince }
 
 // NewID mints a random lease ID.
 func NewID() string {

@@ -122,6 +122,17 @@ deliberate decision, not a refactor.
   `spawn.Engine.SpawnAll` too: it returns a `spawn.RollbackError` carrying every
   `lease.Report`, and `cli.Env.spawnAll` is the one choke point that prints them with
   `reportKept`.
+- **`Lease.Links` is the undo record; `Lease.Sources` is provenance.** Only `Links` is ever
+  acted on by revocation. `Sources` records which sources a spawn was materialised from so
+  upgrade can re-attach one that momentarily exported no skills - the links that would
+  otherwise prove it are exactly what such a source destroys. It gates *additions* only;
+  no removal may ever consult it, or provenance would start widening what gets deleted.
+- **The lease record is versioned, and a reader asks what a version *carries*.** Compare
+  against the version the field landed in (`lease.provenanceSince`), never against
+  `lease.FormatVersion` - bumping the format for one new field would otherwise declare every
+  other field missing from every record on disk. A record too old for a field falls back to
+  the behaviour it was written under; reading the absence as an empty set would turn every
+  pre-existing lease into a mass deletion.
 - **A process lease never trusts a bare PID.** `lease.Owner` carries a start token from
   `internal/proc`; a live PID with a different token is a dead lease. When the prober cannot
   tell, the lease is treated as alive - barracks would rather leak a symlink than delete one
@@ -135,7 +146,9 @@ deliberate decision, not a refactor.
   Exports land in a temp dir and are renamed, so a partial fetch can never look complete.
   `store.Locate` reads that path back, which is how upgrade tells which source and commit a
   spawned link belongs to - never the `Source` label on the lease record, which `--pin`
-  rewrites.
+  rewrites. The path encodes a commit but never a *ref*, so one repo equipped at two refs
+  gives every link two candidates; `upgrade.matchMove` ranks them by commit, then skill
+  membership, then subpath depth rather than trusting `Locate` alone.
 - **`upgrade --dry-run` and a real run must print the same body.** `upgrade.Plan` does every
   read and decision; `upgrade.Apply` only executes and records failures. Anything that
   decides at apply time breaks that guarantee. Plan does fetch into the store - a per-skill

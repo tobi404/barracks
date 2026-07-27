@@ -182,6 +182,30 @@ func TestStoreListIgnoresNonYAML(t *testing.T) {
 	}
 }
 
+// TestHasProvenanceIsNotTiedToTheCurrentFormat: HasProvenance answers "was this
+// record written after Sources landed", never "is this record the newest
+// format". Asking the latter makes the next unrelated FormatVersion bump report
+// every valid record on disk as having no provenance, which drops upgrade back
+// to inspecting links - and a source that momentarily exports no skills has no
+// links left to prove a spawn carries it, so it would be stranded for good.
+func TestHasProvenanceIsNotTiedToTheCurrentFormat(t *testing.T) {
+	if provenanceSince > FormatVersion {
+		t.Fatalf("provenanceSince %d is ahead of the format being written (%d)", provenanceSince, FormatVersion)
+	}
+	// Records at the version provenance landed in, and every version after it -
+	// including ones a future bump has moved past.
+	for v := provenanceSince; v <= FormatVersion+2; v++ {
+		if !(&Lease{Version: v}).HasProvenance() {
+			t.Errorf("a version-%d record does not report the provenance it carries", v)
+		}
+	}
+	for v := 0; v < provenanceSince; v++ {
+		if (&Lease{Version: v}).HasProvenance() {
+			t.Errorf("a version-%d record claims provenance written before the field existed", v)
+		}
+	}
+}
+
 func ids(ls []*Lease) []string {
 	out := make([]string, len(ls))
 	for i, l := range ls {
