@@ -11,8 +11,10 @@ command surface; this file covers what a contributor needs that the code does no
 `make build` / `make test` / `make cover` / `make lint` - see `Makefile`. Two binaries ship
 from one program: `barracks` (root) and `brk` (`cmd/brk`).
 
-CI (`.github/workflows/ci.yml`) runs build, `gofmt`, `go vet`, and `make cover-check` on
-both `ubuntu-latest` and `macos-latest`, plus `golangci-lint` on Linux only. The matrix is
+CI (`.github/workflows/ci.yml`) runs build, `make fmt-check`, `make vet`, and
+`make cover-check` on both `ubuntu-latest` and `macos-latest`, plus `golangci-lint` on
+Linux only. Every check lives in exactly one Makefile target that both CI and `make lint`
+invoke - never restate a check's command inline in the workflow. The matrix is
 not decoration: `internal/proc` dispatches on `runtime.GOOS`, so Linux-only CI would leave
 the darwin liveness probe untested. `make golangci` runs the same linter at the version in
 `.golangci-lint-version`; keep that file and the action in sync. `noctx` is disabled in

@@ -4,7 +4,7 @@ LDFLAGS   := -X main.version=$(VERSION)
 COVER_MIN ?= 80.0
 LINT_VER  := $(shell cat .golangci-lint-version)
 
-.PHONY: build install test cover cover-check lint golangci fmt clean
+.PHONY: build install test cover cover-check lint fmt-check vet golangci fmt clean
 
 build:
 	@mkdir -p $(BIN)
@@ -39,8 +39,18 @@ cover-check: cover
 			printf "total coverage %.1f%% (minimum %.1f%%)\n", total, min; \
 		}'
 
-lint:
-	@test -z "$$(gofmt -l . | tee /dev/stderr)" || (echo "run: gofmt -w ." && exit 1)
+# Each check owns its command once; CI invokes the same targets.
+lint: fmt-check vet
+
+fmt-check:
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "::error::these files are not gofmt-clean (run: make fmt)"; \
+		echo "$$unformatted"; \
+		exit 1; \
+	fi
+
+vet:
 	go vet ./...
 
 # The linter CI runs, at the version CI pins.

@@ -10,10 +10,11 @@ on:
 permissions:
   contents: read
 
-# Supersede in-flight runs for the same branch or PR.
+# Supersede in-flight runs for the same pull request. Pushes to main are never
+# cancelled, so every commit that lands keeps its own verdict.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Both operating systems, because internal/proc probes process liveness
@@ -22,6 +23,7 @@ jobs:
   test:
     name: test
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -35,17 +37,10 @@ jobs:
           cache: true
 
       - name: gofmt
-        shell: bash
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::these files are not gofmt-clean (run: make fmt)"
-            echo "$unformatted"
-            exit 1
-          fi
+        run: make fmt-check
 
       - name: vet
-        run: go vet ./...
+        run: make vet
 
       - name: build
         run: make build
@@ -56,6 +51,7 @@ jobs:
   lint:
     name: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 

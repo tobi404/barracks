@@ -244,6 +244,8 @@ make test         # go test -race ./...
 make cover        # coverage report
 make cover-check  # coverage report, failing under 80%
 make lint         # gofmt check and go vet
+make fmt-check    # gofmt check on its own, exactly as CI runs it
+make vet          # go vet on its own, exactly as CI runs it
 make golangci     # the full linter suite, at the version CI pins
 ```
 
