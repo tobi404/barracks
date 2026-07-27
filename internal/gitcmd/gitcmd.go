@@ -205,7 +205,7 @@ func extractTar(r io.Reader, destDir string) error {
 		case tar.TypeSymlink:
 			// Reject links escaping the export root; the store must stay
 			// self-contained so link-safety checks on recall stay meaningful.
-			if _, err := safeJoin(destDir, filepath.Join(filepath.Dir(hdr.Name), hdr.Linkname)); err != nil {
+			if !linkStaysInside(destDir, hdr.Name, hdr.Linkname) {
 				continue
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -232,6 +232,24 @@ func writeFile(path string, r io.Reader, mode os.FileMode) error {
 		return err
 	}
 	return f.Close()
+}
+
+// linkStaysInside reports whether a symlink entry resolves back inside the
+// export root.
+//
+// An absolute link target has to be rejected before the join: filepath.Join
+// swallows a leading separator, so joining "skills/react" with "/etc/passwd"
+// yields "skills/react/etc/passwd" and an escape would look safe.
+func linkStaysInside(root, name, linkname string) bool {
+	if linkname == "" || strings.HasPrefix(linkname, "/") {
+		return false
+	}
+	link := filepath.FromSlash(linkname)
+	if filepath.IsAbs(link) {
+		return false
+	}
+	_, err := safeJoin(root, filepath.Join(filepath.Dir(name), link))
+	return err == nil
 }
 
 func safeJoin(root, name string) (string, error) {

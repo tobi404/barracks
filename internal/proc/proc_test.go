@@ -151,6 +151,79 @@ func TestParseLinuxStat(t *testing.T) {
 	}
 }
 
+// TestPsStartTokenSeparatesGoneFromCannotTell pins down the asymmetry the whole
+// reaper rests on: ErrNotRunning means the process is definitively gone and a
+// lease may be revoked, so a ps that never ran must report anything else.
+func TestPsStartTokenSeparatesGoneFromCannotTell(t *testing.T) {
+	exited := exec.Command("false")
+	if err := exited.Run(); err == nil {
+		t.Fatal("`false` should exit non-zero")
+	}
+	exitErr := exited.ProcessState
+
+	tests := []struct {
+		name           string
+		run            runner
+		wantNotRunning bool
+		wantErr        bool
+		wantToken      string
+	}{
+		{
+			name:      "ps lists the process",
+			run:       func(string, ...string) ([]byte, error) { return []byte("Mon Jul 27 12:00:00 2026 1 bash\n"), nil },
+			wantToken: "Mon Jul 27 12:00:00 2026 1 bash",
+		},
+		{
+			name:           "ps ran and listed nothing",
+			run:            func(string, ...string) ([]byte, error) { return nil, &exec.ExitError{ProcessState: exitErr} },
+			wantNotRunning: true,
+		},
+		{
+			name:           "ps ran and printed nothing",
+			run:            func(string, ...string) ([]byte, error) { return []byte("  \n"), nil },
+			wantNotRunning: true,
+		},
+		{
+			name:    "ps is not on PATH",
+			run:     func(string, ...string) ([]byte, error) { return nil, &exec.Error{Name: "ps", Err: exec.ErrNotFound} },
+			wantErr: true,
+		},
+		{
+			name: "ps could not be started",
+			run: func(string, ...string) ([]byte, error) {
+				return nil, errors.New("fork/exec: resource temporarily unavailable")
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := psStartTokenWith(tt.run, 4242)
+			switch {
+			case tt.wantNotRunning:
+				if !errors.Is(err, ErrNotRunning) {
+					t.Fatalf("psStartTokenWith = (%q, %v), want ErrNotRunning", got, err)
+				}
+			case tt.wantErr:
+				if err == nil {
+					t.Fatalf("psStartTokenWith = (%q, nil), want an error", got)
+				}
+				if errors.Is(err, ErrNotRunning) {
+					t.Fatalf("a ps that never ran reported ErrNotRunning; a live lease would be revoked: %v", err)
+				}
+			default:
+				if err != nil {
+					t.Fatalf("psStartTokenWith: %v", err)
+				}
+				if got != tt.wantToken {
+					t.Errorf("token = %q, want %q", got, tt.wantToken)
+				}
+			}
+		})
+	}
+}
+
 func TestSelfPropagatesProberErrors(t *testing.T) {
 	_, _, err := Self(failingProber{})
 	if err == nil {

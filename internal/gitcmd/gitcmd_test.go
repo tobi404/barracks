@@ -1,6 +1,8 @@
 package gitcmd
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -218,6 +220,76 @@ func TestExportTreeCarriesSymlinks(t *testing.T) {
 	link := filepath.Join(dest, "skills", "react", "alias.md")
 	if !testutil.IsSymlink(t, link) {
 		t.Fatal("symlink was not exported as a symlink")
+	}
+}
+
+// TestExtractTarRefusesEscapingSymlinks covers the links a crafted repository
+// could ship. The store has to stay self-contained: a link pointing outside it
+// would expose arbitrary local files through a spawned skill directory, and
+// would make the link-safety check on recall meaningless.
+func TestExtractTarRefusesEscapingSymlinks(t *testing.T) {
+	tests := []struct {
+		name     string
+		linkname string
+		wantLink bool
+	}{
+		{"relative link inside the tree", "SKILL.md", true},
+		{"relative link up and back down", "../css/SKILL.md", true},
+		{"absolute link", "/etc/passwd", false},
+		{"absolute link to a directory", "/", false},
+		{"relative link escaping the root", "../../../../etc/passwd", false},
+		{"empty link", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			write := func(hdr *tar.Header) {
+				if err := tw.WriteHeader(hdr); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write(&tar.Header{Name: "skills/css/SKILL.md", Typeflag: tar.TypeReg, Mode: 0o644, Size: 0})
+			write(&tar.Header{Name: "skills/react/SKILL.md", Typeflag: tar.TypeReg, Mode: 0o644, Size: 0})
+			write(&tar.Header{
+				Name:     "skills/react/alias.md",
+				Typeflag: tar.TypeSymlink,
+				Linkname: tt.linkname,
+				Mode:     0o777,
+			})
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			dest := t.TempDir()
+			if err := extractTar(&buf, dest); err != nil {
+				t.Fatalf("extractTar: %v", err)
+			}
+
+			link := filepath.Join(dest, "skills", "react", "alias.md")
+			fi, err := os.Lstat(link)
+			if !tt.wantLink {
+				if err == nil {
+					got, _ := os.Readlink(link)
+					t.Fatalf("extracted a link to %q; the store must stay self-contained", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("in-tree link was not extracted: %v", err)
+			}
+			if fi.Mode()&os.ModeSymlink == 0 {
+				t.Errorf("%s is not a symlink", link)
+			}
+			got, err := os.Readlink(link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.linkname {
+				t.Errorf("link target = %q, want %q", got, tt.linkname)
+			}
+		})
 	}
 }
 

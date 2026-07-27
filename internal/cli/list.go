@@ -69,6 +69,7 @@ skills. Pass one of these IDs to spawn or run with --target.
   barracks targets`),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			env.reap()
 			for _, t := range target.Registry {
 				global, err := t.GlobalPath(env.Getenv, env.Home)
 				if err != nil {

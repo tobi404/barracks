@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,9 +33,15 @@ type harness struct {
 
 type stubProber struct {
 	alive map[int]string
+	// unknowable stands in for a prober that cannot tell: no ps on PATH, no
+	// permission, no /proc.
+	unknowable map[int]bool
 }
 
 func (p *stubProber) Identity(pid int) (string, error) {
+	if p.unknowable[pid] {
+		return "", errors.New("cannot identify this process here")
+	}
 	if tok, ok := p.alive[pid]; ok {
 		return tok, nil
 	}
@@ -55,7 +62,7 @@ func newHarness(t *testing.T, skills ...testutil.Skill) *harness {
 		work:   testutil.NewGitRepo(t, filepath.Join(root, "work")),
 		layout: paths.Layout{Config: filepath.Join(root, "brk"), Data: filepath.Join(root, "brk")},
 		now:    time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
-		prober: &stubProber{alive: map[int]string{}},
+		prober: &stubProber{alive: map[int]string{}, unknowable: map[int]bool{}},
 		env:    map[string]string{},
 		home:   filepath.Join(root, "home"),
 	}
@@ -241,6 +248,25 @@ func TestRunPropagatesTheExitCode(t *testing.T) {
 	// Even on a non-zero exit the loadout is recalled.
 	if testutil.Exists(filepath.Join(h.work.Dir, ".claude")) {
 		t.Error("a failing command left the skills behind")
+	}
+}
+
+// TestRunRefusesWhenThisProcessCannotBeIdentified guards the lease model's
+// premise. A lease recorded without a start token would leave the reaper
+// comparing a bare PID, so it could be kept alive forever by an unrelated
+// process that later inherited the number.
+func TestRunRefusesWhenThisProcessCannotBeIdentified(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"))
+
+	h.prober.unknowable[os.Getpid()] = true
+	_, _, err := h.run("run", "frontend", "--", "sh", "-c", "true")
+	if err == nil || !strings.Contains(err.Error(), "cannot identify this process") {
+		t.Fatalf("run with an unidentifiable process = %v, want a refusal", err)
+	}
+	if testutil.Exists(filepath.Join(h.work.Dir, ".claude")) {
+		t.Error("the refused run spawned anyway")
 	}
 }
 
@@ -449,6 +475,7 @@ func TestCommandErrors(t *testing.T) {
 		{"recall nothing", []string{"recall", "frontend"}, "not deployed"},
 		{"recall with no name", []string{"recall"}, "--all"},
 		{"recall all with nothing deployed", []string{"recall", "--all"}, "nothing is deployed"},
+		{"recall a name together with --all", []string{"recall", "frontend", "--all"}, "cannot combine"},
 		{"run with no command", []string{"run", "frontend"}, "arg"},
 	}
 	for _, tt := range tests {
@@ -519,6 +546,18 @@ func TestRecallAll(t *testing.T) {
 	h.mustRun("spawn", "frontend")
 	h.mustRun("spawn", "backend")
 
+	// Narrowing an --all invocation with a name is ambiguous, and recall is the
+	// one command whose job is removal, so it is refused rather than guessed at.
+	_, _, err := h.run("recall", "frontend", "--all")
+	if err == nil || !strings.Contains(err.Error(), "cannot combine") {
+		t.Fatalf("recall frontend --all = %v, want a refusal naming the conflict", err)
+	}
+	for _, name := range []string{"react", "css"} {
+		if !testutil.IsSymlink(t, filepath.Join(h.skillsDir(), name)) {
+			t.Errorf("the refused recall removed %s anyway", name)
+		}
+	}
+
 	out := h.mustRun("recall", "--all")
 	for _, want := range []string{"recalled frontend", "recalled backend"} {
 		if !strings.Contains(out, want) {
@@ -582,6 +621,58 @@ func TestEquipPinsTheCommitSoSpawnsReproduce(t *testing.T) {
 	}
 	if !testutil.IsSymlink(t, filepath.Join(h.skillsDir(), "react")) {
 		t.Error("spawn did not use the pinned commit")
+	}
+}
+
+// TestReEquippingTheSameSourceRePinsInPlace covers the natural repeat action:
+// equipping a source a loadout already carries must re-pin it, not attach a
+// second copy. Two entries for one source collide on every skill they provide
+// and leave the loadout unspawnable.
+func TestReEquippingTheSameSourceRePinsInPlace(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"))
+
+	out := h.mustRun("equip", "frontend", h.sourceArg("skills"))
+	if !strings.Contains(out, "already equipped") || !strings.Contains(out, "still pinned at") {
+		t.Errorf("re-equipping an unchanged source = %q, want it reported as already equipped", out)
+	}
+
+	// The branch moves on; re-equipping is how a user re-pins.
+	h.src.AddSkills(t, testutil.Skill{Path: "skills/brand-new"})
+	h.src.Commit(t, "add a skill after equipping")
+
+	out = h.mustRun("equip", "frontend", h.sourceArg("skills"))
+	if !strings.Contains(out, "re-pinned") || !strings.Contains(out, "->") {
+		t.Errorf("re-equipping after the ref moved = %q, want the new pin reported", out)
+	}
+
+	if listOut := h.mustRun("list"); !strings.Contains(listOut, "1 source") {
+		t.Errorf("the loadout carries the source more than once:\n%s", listOut)
+	}
+
+	// The proof that matters: the loadout is still spawnable, at the new pin.
+	h.mustRun("spawn", "frontend")
+	if !testutil.IsSymlink(t, filepath.Join(h.skillsDir(), "brand-new")) {
+		t.Error("the re-pinned commit was not used by the spawn")
+	}
+}
+
+// TestEquippingADifferentRefIsADistinctSource is the other half of the rule:
+// the same repository at another ref is not the same source and must be kept
+// alongside, not collapsed into the existing entry.
+func TestEquippingADifferentRefIsADistinctSource(t *testing.T) {
+	h := newHarness(t)
+	h.src.Tag(t, "v1.0.0")
+	h.mustRun("train", "frontend")
+
+	h.mustRun("equip", "frontend", h.src.Dir+"#main:skills", "--only", "react")
+	out := h.mustRun("equip", "frontend", h.src.Dir+"#v1.0.0:skills", "--only", "css")
+	if strings.Contains(out, "already equipped") {
+		t.Errorf("a different ref was collapsed into the existing source:\n%s", out)
+	}
+	if listOut := h.mustRun("list"); !strings.Contains(listOut, "2 sources") {
+		t.Errorf("list = %s, want both refs recorded as separate sources", listOut)
 	}
 }
 

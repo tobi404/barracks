@@ -128,6 +128,115 @@ func TestTwoLeasesCoexistAndUnwindIndependently(t *testing.T) {
 	}
 }
 
+// TestTwoLeasesRestoreAnAbsentFileInEitherOrder is the ordering case the
+// per-record Existed flag could not answer: the second lease to register always
+// finds the file present, so revoking it last must still leave the repository
+// with no exclude file at all.
+func TestTwoLeasesRestoreAnAbsentFileInEitherOrder(t *testing.T) {
+	tests := []struct {
+		name  string
+		first string
+	}{
+		{"first lease revoked first", "leaseA"},
+		{"second lease revoked first", "leaseB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitDir := filepath.Join(t.TempDir(), ".git")
+			file := filepath.Join(gitDir, "info", "exclude")
+
+			recs := map[string]*Record{}
+			for _, id := range []string{"leaseA", "leaseB"} {
+				rec, err := Add(gitDir, id, []string{"/.claude/skills/" + id})
+				if err != nil {
+					t.Fatalf("Add %s: %v", id, err)
+				}
+				recs[id] = rec
+			}
+
+			second := "leaseB"
+			if tt.first == "leaseB" {
+				second = "leaseA"
+			}
+			for _, id := range []string{tt.first, second} {
+				if err := Remove(recs[id], id); err != nil {
+					t.Fatalf("Remove %s: %v", id, err)
+				}
+			}
+
+			if got, err := os.ReadFile(file); err == nil {
+				t.Errorf("exclude file survived both removals with %q; it was not there to begin with", got)
+			}
+		})
+	}
+}
+
+// TestRemoveKeepsAFileTheUserAlreadyHad guards the other direction: barracks
+// never deletes a file it did not bring into being.
+func TestRemoveKeepsAFileTheUserAlreadyHad(t *testing.T) {
+	tests := []struct {
+		name     string
+		original string
+	}{
+		{"empty file", ""},
+		{"whitespace only", "\n\n"},
+		{"real content", "# mine\n*.log\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitDir := filepath.Join(t.TempDir(), ".git")
+			file := filepath.Join(gitDir, "info", "exclude")
+			if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(file, []byte(tt.original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			rec, err := Add(gitDir, "lease1", []string{"/.claude/skills/react"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Remove(rec, "lease1"); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatalf("barracks deleted a file the user already had: %v", err)
+			}
+			if string(got) != tt.original {
+				t.Errorf("not restored byte for byte\n got: %q\nwant: %q", got, tt.original)
+			}
+		})
+	}
+}
+
+func TestOnlyBarracksBlocks(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"empty", "", true},
+		{"one block", "# barracks:a begin\n/p\n# barracks:a end\n", true},
+		{"two blocks", "# barracks:a begin\n/p\n# barracks:a end\n# barracks:b begin\n/q\n# barracks:b end\n", true},
+		{"block plus user content", "# barracks:a begin\n/p\n# barracks:a end\n*.log\n", false},
+		{"user content only", "*.log\n", false},
+		{"unterminated block", "# barracks:a begin\n/p\n", false},
+		{"stray end fence", "# barracks:a end\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := onlyBarracksBlocks(tt.content); got != tt.want {
+				t.Errorf("onlyBarracksBlocks(%q) = %v, want %v", tt.content, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRemoveToleratesAHandEditedFile(t *testing.T) {
 	gitDir := filepath.Join(t.TempDir(), ".git")
 	file := filepath.Join(gitDir, "info", "exclude")

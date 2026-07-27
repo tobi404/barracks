@@ -60,8 +60,18 @@ outright, the next barracks command reaps the lease.`),
 			// The lease is born owned by this process, which is certainly
 			// alive, and handed to the child once it starts. There is never a
 			// moment where a live lease names a dead process.
+			//
+			// An unidentifiable process cannot own a lease: without a start
+			// token the reaper would be left trusting a bare PID, which is the
+			// one thing a process lease must never do.
 			selfPID := os.Getpid()
-			selfToken, _ := env.Prober.Identity(selfPID)
+			selfToken, err := env.Prober.Identity(selfPID)
+			if err != nil {
+				return fmt.Errorf("cannot identify this process (pid %d), so a process lease could not be verified later: %w", selfPID, err)
+			}
+			if selfToken == "" {
+				return fmt.Errorf("cannot identify this process (pid %d): the prober returned no identity token", selfPID)
+			}
 
 			res, err := env.engine.Spawn(cmd.Context(), spawn.Request{
 				Loadout: l,
@@ -152,7 +162,7 @@ func (e *Env) runChild(argv []string, l *lease.Lease) (int, error) {
 // token is what makes the handover safe against PID reuse later.
 func (e *Env) handOverLease(l *lease.Lease, pid int, command string) {
 	token, err := e.Prober.Identity(pid)
-	if err != nil {
+	if err != nil || token == "" {
 		// Could not identify the child; the lease stays owned by this process,
 		// which still ends the lease correctly when the run finishes.
 		return

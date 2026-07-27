@@ -150,6 +150,62 @@ func TestSaveRoundTripsEquipment(t *testing.T) {
 	}
 }
 
+// TestEquipReplacesTheSameSourceInPlace pins down what counts as the same
+// source. Attaching one twice would make every skill it provides collide with
+// itself, so a repeat is a re-pin - but only when the ref and subpath match
+// too, because those select different content.
+func TestEquipReplacesTheSameSourceInPlace(t *testing.T) {
+	equipmentFor := func(t *testing.T, raw, commit string) Equipment {
+		t.Helper()
+		src, err := source.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Equipment{Source: src, Commit: commit, EquippedAt: testTime}
+	}
+
+	tests := []struct {
+		name         string
+		second       string
+		wantReplaced bool
+		wantEntries  int
+	}{
+		{"same source again", "gh:owner/repo#main:skills", true, 1},
+		{"different ref", "gh:owner/repo#v2:skills", false, 2},
+		{"no ref at all", "gh:owner/repo", false, 2},
+		{"different subpath", "gh:owner/repo#main:other", false, 2},
+		{"different repo", "gh:owner/other#main:skills", false, 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := &Loadout{Name: "frontend", CreatedAt: testTime}
+			first := equipmentFor(t, "gh:owner/repo#main:skills", "aaaaaaa")
+			if replaced := l.Equip(first); replaced != nil {
+				t.Fatalf("first Equip replaced %+v, want nil", replaced)
+			}
+
+			replaced := l.Equip(equipmentFor(t, tt.second, "bbbbbbb"))
+			if tt.wantReplaced {
+				if replaced == nil {
+					t.Fatal("Equip attached a second copy of the same source")
+				}
+				if replaced.Commit != "aaaaaaa" {
+					t.Errorf("replaced entry = %q, want the previous pin", replaced.Commit)
+				}
+				if l.Equipment[0].Commit != "bbbbbbb" {
+					t.Errorf("pin = %q, want the new commit", l.Equipment[0].Commit)
+				}
+			} else if replaced != nil {
+				t.Errorf("Equip collapsed %s into the existing source", tt.second)
+			}
+			if len(l.Equipment) != tt.wantEntries {
+				t.Errorf("equipment = %d entries, want %d", len(l.Equipment), tt.wantEntries)
+			}
+		})
+	}
+}
+
 // TestSavedFileIsHandEditable checks the promise made in the docs: a user can
 // open the definition and understand it.
 func TestSavedFileIsHandEditable(t *testing.T) {

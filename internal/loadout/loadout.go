@@ -48,6 +48,28 @@ type Loadout struct {
 	Equipment   []Equipment `yaml:"equipment"`
 }
 
+// Equip attaches eq, replacing any equipment already attached from the same
+// source identity - host, owner, repo, ref, and subpath all matching.
+//
+// Re-equipping a source is a re-pin, not a second copy. Two entries for one
+// source would contribute the same skill names twice and make the loadout
+// unspawnable, with a collision message naming the same source on both sides.
+// A different ref or subpath is a different source and is kept alongside.
+//
+// It returns the equipment it replaced, or nil when eq is newly attached.
+func (l *Loadout) Equip(eq Equipment) *Equipment {
+	for i := range l.Equipment {
+		if l.Equipment[i].Ident() != eq.Ident() {
+			continue
+		}
+		previous := l.Equipment[i]
+		l.Equipment[i] = eq
+		return &previous
+	}
+	l.Equipment = append(l.Equipment, eq)
+	return nil
+}
+
 // SkillCount is the number of skills recorded across every source.
 func (l *Loadout) SkillCount() int {
 	n := 0

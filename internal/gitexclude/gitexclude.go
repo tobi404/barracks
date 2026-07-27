@@ -16,8 +16,16 @@ import (
 type Record struct {
 	File string `yaml:"file"`
 	// Existed reports whether the exclude file was there before barracks wrote
-	// to it. If it was not, removal deletes it again.
+	// to it.
 	Existed bool `yaml:"existed"`
+	// Owned reports whether the file held nothing but barracks blocks when this
+	// record was written - either because it did not exist yet, or because an
+	// earlier lease created it. Only then may removal delete the file again.
+	//
+	// Existed alone cannot answer that: the second lease to register in a
+	// repository always finds the file present, so keying deletion off it makes
+	// restoration depend on the order the leases are revoked in.
+	Owned bool `yaml:"owned"`
 	// AddedNewline reports whether barracks had to terminate the previous last
 	// line. If it did, removal strips that newline back off.
 	AddedNewline bool     `yaml:"added_newline"`
@@ -63,7 +71,8 @@ func Add(gitDir, leaseID string, patterns []string) (*Record, error) {
 	if err := os.WriteFile(file, []byte(b.String()), 0o644); err != nil {
 		return nil, fmt.Errorf("write %s: %w", file, err)
 	}
-	return &Record{File: file, Existed: existed, AddedNewline: addedNewline, Patterns: patterns}, nil
+	owned := !existed || (original != "" && onlyBarracksBlocks(original))
+	return &Record{File: file, Existed: existed, Owned: owned, AddedNewline: addedNewline, Patterns: patterns}, nil
 }
 
 // Remove deletes the block for leaseID and restores the file to exactly what it
@@ -89,7 +98,9 @@ func Remove(rec *Record, leaseID string) error {
 	if rec.AddedNewline {
 		stripped = strings.TrimSuffix(stripped, "\n")
 	}
-	if !rec.Existed && strings.TrimSpace(stripped) == "" {
+	// Nothing at all is left: no line of the user's, and no other lease's block
+	// either. Only a file barracks brought into being may be taken away again.
+	if (rec.Owned || !rec.Existed) && stripped == "" {
 		if err := os.Remove(rec.File); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -120,6 +131,36 @@ func stripBlock(content, leaseID string) (string, bool) {
 		out = append(out, line)
 	}
 	return strings.Join(out, "\n"), found
+}
+
+// onlyBarracksBlocks reports whether content is made up of barracks blocks and
+// nothing else, so a file holding it was brought into being by barracks.
+func onlyBarracksBlocks(content string) bool {
+	const prefix = "# barracks:"
+	lines := strings.Split(content, "\n")
+	inBlock := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, prefix) && strings.HasSuffix(trimmed, " begin"):
+			if inBlock {
+				return false
+			}
+			inBlock = true
+		case strings.HasPrefix(trimmed, prefix) && strings.HasSuffix(trimmed, " end"):
+			if !inBlock {
+				return false
+			}
+			inBlock = false
+		case inBlock:
+			continue
+		case line == "":
+			continue
+		default:
+			return false
+		}
+	}
+	return !inBlock
 }
 
 func read(file string) (content string, existed bool, err error) {

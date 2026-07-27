@@ -209,6 +209,13 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 	if l.Kind == "" {
 		l.Kind = lease.KindManual
 	}
+	if l.Kind == lease.KindProcess {
+		// Without a start token the reaper can only compare a bare PID, and a
+		// recycled PID would keep a dead lease alive forever.
+		if req.Owner == nil || req.Owner.PID <= 0 || req.Owner.StartToken == "" {
+			return nil, fmt.Errorf("a process lease needs an owner process with an identity token")
+		}
+	}
 	if l.Kind == lease.KindDeadline {
 		if req.Duration <= 0 {
 			return nil, fmt.Errorf("a deadline lease needs a positive duration")

@@ -94,6 +94,39 @@ func (s *scene) request(l *loadout.Loadout) Request {
 
 func (s *scene) skillsDir() string { return filepath.Join(s.work.Dir, ".claude", "skills") }
 
+// TestProcessLeaseNeedsAnIdentifiableOwner refuses the one lease the reaper
+// cannot judge later: without a start token it would be left comparing a bare
+// PID, which a recycled PID makes meaningless.
+func TestProcessLeaseNeedsAnIdentifiableOwner(t *testing.T) {
+	tests := []struct {
+		name  string
+		owner *lease.Owner
+	}{
+		{"no owner at all", nil},
+		{"owner without a start token", &lease.Owner{PID: 4242, Command: "claude"}},
+		{"owner without a pid", &lease.Owner{StartToken: "tok", Command: "claude"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newScene(t)
+			req := s.request(s.loadout(t, "frontend", "", nil, nil))
+			req.Kind = lease.KindProcess
+			req.Owner = tt.owner
+
+			_, err := s.engine.Spawn(ctx(), req)
+			if err == nil {
+				t.Fatal("Spawn accepted a process lease with no verifiable owner")
+			}
+			if !strings.Contains(err.Error(), "identity token") {
+				t.Errorf("err = %v, want it to name the missing identity token", err)
+			}
+			if testutil.Exists(s.skillsDir()) {
+				t.Error("the refused spawn left something behind")
+			}
+		})
+	}
+}
+
 func TestSpawnCreatesSymlinksIntoTheStore(t *testing.T) {
 	s := newScene(t)
 	res, err := s.engine.Spawn(ctx(), s.request(s.loadout(t, "frontend", "", nil, nil)))

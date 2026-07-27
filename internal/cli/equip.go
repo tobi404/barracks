@@ -93,7 +93,7 @@ Use --only and --except to take a few skills out of a large repo:
 				Skills:     skill.Names(selected),
 				EquippedAt: env.now().UTC(),
 			}
-			l.Equipment = append(l.Equipment, eq)
+			previous := l.Equip(eq)
 			if err := env.loadouts.Save(l); err != nil {
 				return err
 			}
@@ -102,7 +102,14 @@ Use --only and --except to take a few skills out of a large repo:
 			if fetched {
 				verb = "fetched"
 			}
-			fmt.Fprintf(env.Out, "equipped %s with %s@%s (%s source)\n", l.Name, src.Ident(), shortSHA(commit), verb)
+			switch {
+			case previous == nil:
+				fmt.Fprintf(env.Out, "equipped %s with %s@%s (%s source)\n", l.Name, src.Ident(), shortSHA(commit), verb)
+			case previous.Commit == commit:
+				fmt.Fprintf(env.Out, "%s was already equipped with %s, still pinned at %s\n", l.Name, src.Ident(), shortSHA(commit))
+			default:
+				fmt.Fprintf(env.Out, "%s was already equipped with %s, re-pinned %s -> %s\n", l.Name, src.Ident(), shortSHA(previous.Commit), shortSHA(commit))
+			}
 			for _, s := range selected {
 				fmt.Fprintf(env.Out, "  + %s\n", s.Name)
 			}

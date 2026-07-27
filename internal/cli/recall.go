@@ -41,6 +41,12 @@ byte.
 			if !all && len(args) == 0 {
 				return fmt.Errorf("name a loadout to recall, or pass --all")
 			}
+			// Recall is the one command whose job is removal, so an ambiguous
+			// invocation is refused rather than interpreted: guessing wrong
+			// takes away more than was asked for.
+			if all && len(args) > 0 {
+				return fmt.Errorf("cannot combine the loadout name %q with --all: use `barracks recall %s` to recall just that loadout, or `barracks recall --all` to recall every loadout deployed here", args[0], args[0])
+			}
 			tgt, err := target.Lookup(targetID)
 			if err != nil {
 				return err

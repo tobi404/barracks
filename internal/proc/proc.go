@@ -112,10 +112,29 @@ func parseLinuxStat(stat string) (string, error) {
 // for the original - and a PID is only recycled after the whole PID space has
 // wrapped, by which time the parent and command have almost certainly changed.
 func psStartToken(pid int) (string, error) {
-	out, err := exec.Command("ps", "-o", "lstart=,ppid=,comm=", "-p", strconv.Itoa(pid)).Output()
+	return psStartTokenWith(runCommand, pid)
+}
+
+// runner is how psStartTokenWith reaches the outside world, so the failure
+// modes below are testable without a real ps.
+type runner func(name string, args ...string) ([]byte, error)
+
+func runCommand(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+func psStartTokenWith(run runner, pid int) (string, error) {
+	out, err := run("ps", "-o", "lstart=,ppid=,comm=", "-p", strconv.Itoa(pid))
 	if err != nil {
-		// ps exits non-zero when the pid is gone.
-		return "", ErrNotRunning
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			// ps ran and listed nothing, so the pid really is gone.
+			return "", ErrNotRunning
+		}
+		// ps could not be run at all - no PATH, no such binary, no fork. That
+		// is "cannot tell", and it must never be reported as "not running":
+		// callers treat ErrNotRunning as licence to revoke a lease.
+		return "", fmt.Errorf("identify pid %d with ps: %w", pid, err)
 	}
 	token := strings.Join(strings.Fields(string(out)), " ")
 	if token == "" {
