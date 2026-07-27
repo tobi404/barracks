@@ -35,8 +35,9 @@ deliberate decision, not a refactor.
   it is unsure about.
 - **Spawning must leave `git status` clean.** Paths go in `.git/info/exclude` via a
   lease-keyed fenced block (`internal/gitexclude`), never `.gitignore`. The record tracks
-  whether the file existed and whether a trailing newline was added, so removal restores it
-  byte for byte.
+  whether the file held nothing but barracks blocks and whether a trailing newline was
+  added, so removal restores it byte for byte and only deletes a file barracks itself
+  brought into being.
 - **The store is content-addressed and shared.** `store/<host>/<owner>/<repo>@<commit>/`.
   Exports land in a temp dir and are renamed, so a partial fetch can never look complete.
 

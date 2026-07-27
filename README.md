@@ -82,6 +82,10 @@ barracks equip frontend gh:owner/skills --except deprecated-helper
 `--only` and `--except` take glob patterns, so you can pull three skills out of a large
 repo rather than all of them.
 
+Equipping a source a loadout already has re-pins it to the newly resolved commit instead of
+attaching a second copy. A different `#ref` or subpath is a different source and is kept
+alongside.
+
 ### `barracks spawn <loadout>`
 
 Materialises the loadout into the agent's skills directory in the current repo. Skills are
@@ -177,7 +181,9 @@ and one copy on disk, however many repos they are spawned into.
 
 **Spawning leaves `git status` clean.** Created paths are registered in
 `.git/info/exclude`, never in the committed `.gitignore`. Recalling removes that block and
-restores the file byte for byte.
+restores the file byte for byte - and only deletes the file if barracks was what created
+it. Outside a git repository barracks still spawns into the working directory; it just
+says there was no exclude file to register in.
 
 **Lifetimes are governed by leases.** A spawn writes a record describing exactly what it
 created and when it should end:
