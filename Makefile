@@ -1,8 +1,10 @@
-BIN     := bin
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X main.version=$(VERSION)
+BIN       := bin
+VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS   := -X main.version=$(VERSION)
+COVER_MIN ?= 80.0
+LINT_VER  := $(shell cat .golangci-lint-version)
 
-.PHONY: build install test cover lint fmt clean
+.PHONY: build install test cover cover-check lint golangci fmt clean
 
 build:
 	@mkdir -p $(BIN)
@@ -20,9 +22,30 @@ cover:
 	go test -race -covermode=atomic -coverprofile=coverage.out ./...
 	go tool cover -func=coverage.out | tail -1
 
+# Same gate CI enforces.
+cover-check: cover
+	@go tool cover -func=coverage.out | awk -v min=$(COVER_MIN) '\
+		/^total:/ { \
+			seen = 1; \
+			gsub(/%/, "", $$3); \
+			total = $$3 + 0; \
+		} \
+		END { \
+			if (!seen) { print "no total line in coverage profile"; exit 1; } \
+			if (total < min + 0) { \
+				printf "total coverage %.1f%% is below the %.1f%% minimum\n", total, min; \
+				exit 1; \
+			} \
+			printf "total coverage %.1f%% (minimum %.1f%%)\n", total, min; \
+		}'
+
 lint:
 	@test -z "$$(gofmt -l . | tee /dev/stderr)" || (echo "run: gofmt -w ." && exit 1)
 	go vet ./...
+
+# The linter CI runs, at the version CI pins.
+golangci:
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(LINT_VER) run ./...
 
 fmt:
 	gofmt -w .

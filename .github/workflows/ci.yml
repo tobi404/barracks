@@ -1,0 +1,71 @@
+name: CI
+
+# Verification for every change. Release packaging is deliberately not here - a
+# release workflow belongs in its own file next to this one.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Supersede in-flight runs for the same branch or PR.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Both operating systems, because internal/proc probes process liveness
+  # differently per OS and that code is what keeps a live session's skills from
+  # being deleted. Linux-only CI would leave the macOS path unverified.
+  test:
+    name: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt-clean (run: make fmt)"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: build
+        run: make build
+
+      - name: test and coverage
+        run: make cover-check
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # One OS is enough: internal/proc branches on runtime.GOOS rather than
+      # build tags, so every file is analysed on every platform.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version-file: .golangci-lint-version

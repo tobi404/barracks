@@ -11,6 +11,15 @@ command surface; this file covers what a contributor needs that the code does no
 `make build` / `make test` / `make cover` / `make lint` - see `Makefile`. Two binaries ship
 from one program: `barracks` (root) and `brk` (`cmd/brk`).
 
+CI (`.github/workflows/ci.yml`) runs build, `gofmt`, `go vet`, and `make cover-check` on
+both `ubuntu-latest` and `macos-latest`, plus `golangci-lint` on Linux only. The matrix is
+not decoration: `internal/proc` dispatches on `runtime.GOOS`, so Linux-only CI would leave
+the darwin liveness probe untested. `make golangci` runs the same linter at the version in
+`.golangci-lint-version`; keep that file and the action in sync. `noctx` is disabled in
+`.golangci.yml` on purpose - the reasoning is written in the config, next to the setting.
+Coverage floor is 80% (`COVER_MIN` in the `Makefile`). Add release automation as a separate
+workflow file rather than extending this one.
+
 **Tests must never touch the network.** Build local git fixtures with
 `internal/testutil` (`NewSkillRepo` git-inits a temp dir with `SKILL.md` directories) and
 point sources at those paths. `internal/source` treats a filesystem path as a first-class
