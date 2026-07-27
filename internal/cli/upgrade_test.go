@@ -557,6 +557,164 @@ func TestUpgradeHandlesTwoSubpathsOfOneRepo(t *testing.T) {
 	noDanglingLinks(t, h.skillsDir())
 }
 
+// TestUpgradeReattachesASourceThatMomentarilyExportedNoSkills: a source that
+// exports nothing at one upgrade loses every link that proves the spawn carries
+// it. The lease records the sources it was made from precisely so the skills can
+// be re-attached when they come back, instead of the spawn silently diverging
+// from the loadout that still declares the source.
+func TestUpgradeReattachesASourceThatMomentarilyExportedNoSkills(t *testing.T) {
+	h := newHarness(t, testutil.Skill{Path: "pack-a/alpha"}, testutil.Skill{Path: "pack-b/beta"})
+	// pack-b has to survive beta's removal as a directory, or the source stops
+	// resolving altogether rather than merely exporting nothing.
+	testutil.WriteFile(t, filepath.Join(h.src.Dir, "pack-b", "README.md"), "not a skill\n")
+	h.src.Commit(t, "keep pack-b addressable")
+
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("pack-a"))
+	h.mustRun("equip", "frontend", h.sourceArg("pack-b"))
+	h.mustRun("spawn", "frontend")
+
+	beta := filepath.Join(h.skillsDir(), "beta")
+	if !testutil.IsSymlink(t, beta) {
+		t.Fatal("the spawn did not place beta")
+	}
+
+	h.src.RemovePath(t, "pack-b/beta")
+	h.src.Commit(t, "drop beta")
+
+	out := h.mustRun("upgrade")
+	if !strings.Contains(out, "- beta") {
+		t.Errorf("upgrade did not report the removal:\n%s", out)
+	}
+	if testutil.Exists(beta) {
+		t.Fatal("beta survived its removal upstream")
+	}
+	if !testutil.IsSymlink(t, filepath.Join(h.skillsDir(), "alpha")) {
+		t.Fatal("the other source's skill was lost with it")
+	}
+
+	h.src.AddSkills(t, testutil.Skill{Path: "pack-b/beta", Body: "beta is back\n"})
+	h.src.Commit(t, "restore beta")
+
+	out = h.mustRun("upgrade")
+	if !strings.Contains(out, "+ beta") {
+		t.Errorf("upgrade did not re-attach the restored skill:\n%s", out)
+	}
+	if body := resolved(t, beta); !strings.Contains(body, "beta is back") {
+		t.Errorf("beta was not re-attached to the spawn: %q", body)
+	}
+	noDanglingLinks(t, h.skillsDir())
+	if got := h.work.Status(t); got != "" {
+		t.Errorf("git status not clean:\n%s", got)
+	}
+}
+
+// TestUpgradeFallsBackForALeaseWithoutProvenance: a record written before
+// leases carried provenance must upgrade under the behaviour it was written
+// under. Reading its missing source list as "came from nothing" would turn
+// every spawn already on disk into a mass removal.
+func TestUpgradeFallsBackForALeaseWithoutProvenance(t *testing.T) {
+	h := newHarness(t)
+	h.equipped("frontend")
+	h.mustRun("spawn", "frontend")
+
+	before := snapshotLinks(t, h.skillsDir())
+	if len(before) == 0 {
+		t.Fatal("nothing was spawned")
+	}
+
+	// Age the record: no version marker, no sources, exactly as it was written
+	// before this field existed.
+	store := leaseStore(t, h)
+	leases, _ := store.List()
+	l := leases[0]
+	l.Version = 0
+	l.Sources = nil
+	if err := store.Save(l); err != nil {
+		t.Fatal(err)
+	}
+
+	h.src.AddSkills(t, testutil.Skill{Path: "skills/react", Body: "version two\n"})
+	h.src.Commit(t, "move react on")
+
+	out, errb, err := h.run("upgrade")
+	if err != nil {
+		t.Fatalf("upgrade of an old record failed: %v\n%s\n%s", err, out, errb)
+	}
+	if strings.Contains(out, "- ") {
+		t.Errorf("an old record had links removed from it:\n%s", out)
+	}
+	after := snapshotLinks(t, h.skillsDir())
+	if len(after) != len(before) {
+		t.Fatalf("upgrade lost links from an old record\n got: %v\nwant the same names as: %v", after, before)
+	}
+	for name := range before {
+		if _, ok := after[name]; !ok {
+			t.Errorf("%s was removed from a spawn whose lease had no provenance", name)
+		}
+	}
+	if body := resolved(t, filepath.Join(h.skillsDir(), "react")); !strings.Contains(body, "version two") {
+		t.Errorf("the old record was not relinked onto the new commit: %q", body)
+	}
+	noDanglingLinks(t, h.skillsDir())
+
+	// Having established it the only way an old record allows, upgrade records it.
+	leases, _ = store.List()
+	if !leases[0].HasProvenance() {
+		t.Error("upgrade did not bring the old record up to the current format")
+	}
+	if len(leases[0].Sources) != 1 {
+		t.Errorf("recorded sources = %v, want the one equipped source", leases[0].Sources)
+	}
+}
+
+// TestUpgradeKeepsOneRepoEquippedAtTwoRefsStable: two equipment entries for one
+// repository at different refs produce two candidates for every link, because a
+// store path records a commit but never a ref. Attributing a link to the wrong
+// one plans a removal the next run undoes, so the spawn oscillates instead of
+// converging. Two consecutive runs must both be no-ops.
+func TestUpgradeKeepsOneRepoEquippedAtTwoRefsStable(t *testing.T) {
+	h := newHarness(t, testutil.Skill{Path: "skills/alpha"}, testutil.Skill{Path: "skills/beta"})
+	h.src.CheckoutNew(t, "v1")
+	h.src.Checkout(t, "main")
+	h.src.AddSkills(t, testutil.Skill{Path: "skills/alpha", Body: "alpha moved on\n"})
+	h.src.Commit(t, "move main past v1")
+
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.src.Dir+"#main:skills", "--only", "alpha")
+	h.mustRun("equip", "frontend", h.src.Dir+"#v1:skills", "--only", "beta")
+	h.mustRun("spawn", "frontend")
+
+	beta := filepath.Join(h.skillsDir(), "beta")
+	want, err := os.Readlink(beta)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for run := 1; run <= 2; run++ {
+		out := h.mustRun("upgrade")
+		if strings.Contains(out, "- beta") || strings.Contains(out, "+ beta") {
+			t.Errorf("run %d moved a link the other ref governs:\n%s", run, out)
+		}
+		got, err := os.Readlink(beta)
+		if err != nil {
+			t.Fatalf("run %d removed beta: %v", run, err)
+		}
+		if got != want {
+			t.Errorf("run %d repointed beta: %s -> %s", run, want, got)
+		}
+	}
+
+	alpha, err := os.Readlink(filepath.Join(h.skillsDir(), "alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(alpha, h.src.Head(t)) {
+		t.Errorf("alpha is not on main's commit: %s", alpha)
+	}
+	noDanglingLinks(t, h.skillsDir())
+}
+
 func TestUpgradeErrors(t *testing.T) {
 	h := newHarness(t)
 

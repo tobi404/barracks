@@ -247,10 +247,18 @@ func (s Source) MirrorKey() string {
 	return filepath.Join(s.Host, filepath.FromSlash(s.Owner), s.Repo+".git")
 }
 
+// RepoKey identifies the repository alone, without ref or subpath.
+//
+// It is the part of a source's identity that `upgrade --pin` cannot rewrite,
+// which is what makes it safe to record beside a spawn and match on later.
+func (s Source) RepoKey() string {
+	return fmt.Sprintf("%s/%s/%s", s.Host, s.Owner, s.Repo)
+}
+
 // Ident is a short human label, e.g. "github.com/tobi404/skills#main:skills".
 func (s Source) Ident() string {
 	b := &strings.Builder{}
-	fmt.Fprintf(b, "%s/%s/%s", s.Host, s.Owner, s.Repo)
+	b.WriteString(s.RepoKey())
 	if s.Ref != "" {
 		fmt.Fprintf(b, "#%s", s.Ref)
 	}

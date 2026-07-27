@@ -9,6 +9,8 @@ import (
 
 	"github.com/tobi404/barracks/internal/gitexclude"
 	"github.com/tobi404/barracks/internal/lease"
+	"github.com/tobi404/barracks/internal/loadout"
+	"github.com/tobi404/barracks/internal/source"
 )
 
 // OpKind is one change to a spawned symlink.
@@ -48,6 +50,7 @@ type SpawnPlan struct {
 	Recall bool
 
 	links    []lease.Link
+	sources  []lease.SourceRef
 	patterns []string
 	gitDir   string
 }
@@ -63,7 +66,7 @@ func (s *SpawnPlan) Reportable() bool {
 }
 
 // planSpawns works out what each live spawn of this loadout needs.
-func (e *Engine) planSpawns(ctx context.Context, name string, leases []*lease.Lease, moves []move, opts Options) []SpawnPlan {
+func (e *Engine) planSpawns(ctx context.Context, name string, equipment []loadout.Equipment, leases []*lease.Lease, moves []move, opts Options) []SpawnPlan {
 	if len(moves) == 0 {
 		return nil
 	}
@@ -72,7 +75,7 @@ func (e *Engine) planSpawns(ctx context.Context, name string, leases []*lease.Le
 		if l.Loadout != name {
 			continue
 		}
-		sp := e.planSpawn(ctx, l, moves, opts)
+		sp := e.planSpawn(ctx, l, equipment, moves, opts)
 		if sp.Reportable() || sp.Changed() {
 			out = append(out, sp)
 		}
@@ -94,8 +97,8 @@ func (e *Engine) planSpawns(ctx context.Context, name string, leases []*lease.Le
 // barracks skips only what it can prove is live. A manual or deadline lease may
 // have a session sitting on it and barracks has no way to know, so those are
 // relinked; the README says exactly that rather than implying more.
-func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, moves []move, opts Options) SpawnPlan {
-	sp := SpawnPlan{Lease: l}
+func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, equipment []loadout.Equipment, moves []move, opts Options) SpawnPlan {
+	sp := SpawnPlan{Lease: l, sources: e.carriedSources(l, equipment)}
 
 	recorded := map[string]bool{}
 	for _, link := range l.Links {
@@ -104,7 +107,7 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, moves []move, op
 
 	var final []lease.Link
 	for _, link := range l.Links {
-		mv := e.matchMove(link.Target, moves)
+		mv := e.matchMove(link, moves)
 		if mv == nil {
 			final = append(final, link) // not a link any source of ours governs
 			continue
@@ -136,10 +139,10 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, moves []move, op
 		final = append(final, lease.Link{Path: link.Path, Target: target, Skill: link.Skill, Source: mv.ident})
 	}
 
-	// Skills that appeared upstream, for sources this spawn already carries.
+	// Skills that appeared upstream, for sources this spawn was made from.
 	for i := range moves {
 		mv := &moves[i]
-		if !e.spawnCarries(l.Links, mv) {
+		if !carries(sp.sources, mv) {
 			continue
 		}
 		for _, name := range sortedNames(mv.skills) {
@@ -164,7 +167,12 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, moves []move, op
 	// that is already where it should be prints nothing at all.
 	if sp.Changed() {
 		if reason := e.hold(l, opts); reason != "" {
-			return SpawnPlan{Lease: l, Skip: reason, links: append([]lease.Link(nil), l.Links...)}
+			return SpawnPlan{
+				Lease:   l,
+				Skip:    reason,
+				links:   append([]lease.Link(nil), l.Links...),
+				sources: sp.sources,
+			}
 		}
 	}
 	sp.Recall = len(final) == 0
@@ -211,29 +219,128 @@ func planTouch(link lease.Link, guard lease.StoreGuard, kind OpKind, to string) 
 //
 // The store path is the fact on disk; the label is only a string, and --pin
 // rewrites it. Reading the commit out of the path is also what lets a spawn
-// left behind at an older commit be recognised and brought forward. The longest
-// matching subpath wins, so a repo equipped at both its root and a subdirectory
-// resolves to the more specific of the two.
-func (e *Engine) matchMove(target string, moves []move) *move {
+// left behind at an older commit be recognised and brought forward.
+//
+// A store path names a repository and a commit but never a ref, so one repo
+// equipped twice at two different refs produces two candidates for every link
+// it holds. Picking the first would attribute a link to a source that does not
+// provide its skill and plan a removal for it, which the next run would undo.
+// Candidates are therefore ranked: the move whose commits the link actually
+// sits on wins first, then the one that still provides the skill, and only then
+// the longest matching subpath - so a repo equipped at both its root and a
+// subdirectory still resolves to the more specific of the two.
+func (e *Engine) matchMove(link lease.Link, moves []move) *move {
 	var best *move
+	var bestScore matchScore
 	for i := range moves {
-		_, rel, ok := e.Store.Locate(moves[i].src, target)
+		commit, rel, ok := e.Store.Locate(moves[i].src, link.Target)
 		if !ok || !underSubpath(rel, moves[i].subpath) {
 			continue
 		}
-		if best == nil || len(moves[i].subpath) > len(best.subpath) {
-			best = &moves[i]
+		score := matchScore{
+			commit:  boolScore(commit == moves[i].from || commit == moves[i].to),
+			skill:   boolScore(hasSkill(moves[i].skills, link.Skill)),
+			subpath: len(moves[i].subpath),
+		}
+		if best == nil || score.beats(bestScore) {
+			best, bestScore = &moves[i], score
 		}
 	}
 	return best
 }
 
-// spawnCarries reports whether this spawn already has links from that source,
-// which is what makes an upstream addition belong here. A loadout equipped with
-// a new source after a spawn is not silently materialised by an upgrade.
-func (e *Engine) spawnCarries(links []lease.Link, mv *move) bool {
+// matchScore ranks the sources a link could have come from, most decisive
+// field first.
+type matchScore struct {
+	commit  int
+	skill   int
+	subpath int
+}
+
+func (s matchScore) beats(other matchScore) bool {
+	switch {
+	case s.commit != other.commit:
+		return s.commit > other.commit
+	case s.skill != other.skill:
+		return s.skill > other.skill
+	default:
+		return s.subpath > other.subpath
+	}
+}
+
+func boolScore(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func hasSkill(skills map[string]string, name string) bool {
+	_, ok := skills[name]
+	return ok
+}
+
+// carriedSources is the set of sources this spawn was materialised from, which
+// is what makes an upstream addition belong here. A loadout equipped with a new
+// source after a spawn is not silently materialised by an upgrade.
+//
+// A lease records its provenance, so the answer survives a source that
+// momentarily exports no skills: every link from it is removed, and the record
+// is still there to re-attach the skills when they come back. Proving it from
+// the links instead would destroy exactly the evidence needed.
+//
+// A lease written before the record existed has no Sources field, and reading
+// its absence as "carries nothing" would strand every spawn already on disk.
+// Those fall back to inspecting the links, which is the behaviour they were
+// written under, and are given the record on the way past.
+func (e *Engine) carriedSources(l *lease.Lease, equipment []loadout.Equipment) []lease.SourceRef {
+	if l.HasProvenance() {
+		return refreshIdents(l.Sources, equipment)
+	}
+	var out []lease.SourceRef
+	for _, eq := range equipment {
+		if !e.linksFrom(l.Links, eq.Source, eq.Subpath) {
+			continue
+		}
+		out = append(out, lease.SourceRef{Ident: eq.Ident(), Key: eq.RepoKey(), Subpath: eq.Subpath})
+	}
+	return out
+}
+
+// linksFrom reports whether any recorded link points inside that source.
+func (e *Engine) linksFrom(links []lease.Link, src source.Source, subpath string) bool {
 	for _, link := range links {
-		if _, rel, ok := e.Store.Locate(mv.src, link.Target); ok && underSubpath(rel, mv.subpath) {
+		if _, rel, ok := e.Store.Locate(src, link.Target); ok && underSubpath(rel, subpath) {
+			return true
+		}
+	}
+	return false
+}
+
+// refreshIdents brings the recorded labels back in step with the definition.
+// `--pin` rewrites a source's ref and therefore its Ident; the repository and
+// subpath it is matched on cannot change, so the entry is found regardless.
+func refreshIdents(recorded []lease.SourceRef, equipment []loadout.Equipment) []lease.SourceRef {
+	if len(recorded) == 0 {
+		return nil
+	}
+	out := append([]lease.SourceRef(nil), recorded...)
+	for i := range out {
+		for _, eq := range equipment {
+			if out[i].Key == eq.RepoKey() && out[i].Subpath == eq.Subpath {
+				out[i].Ident = eq.Ident()
+				break
+			}
+		}
+	}
+	return out
+}
+
+// carries reports whether the spawn's provenance includes this source.
+func carries(sources []lease.SourceRef, mv *move) bool {
+	key := mv.src.RepoKey()
+	for _, s := range sources {
+		if s.Key == key && s.Subpath == mv.subpath {
 			return true
 		}
 	}

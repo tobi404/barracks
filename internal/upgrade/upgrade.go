@@ -97,6 +97,13 @@ type move struct {
 	subpath string
 	ident   string
 	skills  map[string]string // skill name -> absolute path at the pinned commit
+	// from and to are the commits this move spans: the one the source was
+	// pinned at before the upgrade and the one it is pinned at after. A store
+	// path names a repository and a commit but never a ref, so these are the
+	// only thing that tells two equipment entries for one repository at
+	// different refs apart when a link has to be attributed to one of them.
+	from string
+	to   string
 }
 
 // LoadoutPlan is what an upgrade would do to one loadout.
@@ -194,7 +201,7 @@ func (e *Engine) planLoadout(ctx context.Context, l *loadout.Loadout, leases []*
 		}
 	}
 
-	p.Spawns = e.planSpawns(ctx, l.Name, leases, moves, opts)
+	p.Spawns = e.planSpawns(ctx, l.Name, next.Equipment, leases, moves, opts)
 	return p
 }
 
@@ -204,7 +211,14 @@ func (e *Engine) planLoadout(ctx context.Context, l *loadout.Loadout, leases []*
 // there is no way to tell what should be linked, and guessing would mean
 // planning removals for skills that are only unreadable, not gone.
 func (e *Engine) moveFor(eq loadout.Equipment, sp SourcePlan) *move {
-	mv := &move{src: eq.Source, subpath: eq.Subpath, ident: eq.Ident(), skills: sp.skills}
+	mv := &move{
+		src:     eq.Source,
+		subpath: eq.Subpath,
+		ident:   eq.Ident(),
+		skills:  sp.skills,
+		from:    sp.OldCommit,
+		to:      eq.Commit,
+	}
 	if mv.skills != nil {
 		return mv // already discovered at the commit we just fetched
 	}

@@ -77,6 +77,14 @@ func (e *Engine) applySpawn(sp *SpawnPlan) {
 	}
 
 	l.Links = reconcileLinks(sp.links, sp.Lease.Links)
+	// Provenance is written back whenever it was established, which upgrades a
+	// record from before it existed as a side effect of touching it. A lease
+	// whose links match no equipped source is left at its old format rather
+	// than stamped with an empty set that would read as "came from nothing".
+	if l.HasProvenance() || len(sp.sources) > 0 {
+		l.Version = lease.FormatVersion
+		l.Sources = sp.sources
+	}
 	if err := e.Leases.Save(l); err != nil {
 		sp.Errs = append(sp.Errs, fmt.Errorf("write lease %s: %w", l.ID, err))
 	}
