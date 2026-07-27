@@ -20,8 +20,9 @@ invoke - never restate a check's command inline in the workflow. A make recipe r
 could not parse a file or was missing entirely. `internal/buildcheck` runs the real
 `fmt-check` target against fixtures to keep that silent success from returning. The matrix is
 not decoration: `internal/proc` dispatches on `runtime.GOOS`, so Linux-only CI would leave
-the darwin liveness probe untested. `make golangci` runs the same linter at the version in
-`.golangci-lint-version`; keep that file and the action in sync. `noctx` is disabled in
+the darwin liveness probe untested. `.golangci-lint-version` is the only place the linter
+version is written: `make golangci` reads it, and the action reads the same file through
+its `version-file` input - bump it there, never inline. `noctx` is disabled in
 `.golangci.yml` on purpose - the reasoning is written in the config, next to the setting.
 Coverage floor is 80% (`COVER_MIN` in the `Makefile`). Add release automation as a separate
 workflow file rather than extending this one.
