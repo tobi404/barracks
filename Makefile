@@ -44,6 +44,11 @@ lint: fmt-check vet
 
 fmt-check:
 	@unformatted=$$(gofmt -l .); \
+	status=$$?; \
+	if [ $$status -ne 0 ]; then \
+		echo "::error::gofmt could not check this tree (exit $$status)"; \
+		exit $$status; \
+	fi; \
 	if [ -n "$$unformatted" ]; then \
 		echo "::error::these files are not gofmt-clean (run: make fmt)"; \
 		echo "$$unformatted"; \
