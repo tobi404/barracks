@@ -221,17 +221,6 @@ func (s *Store) List() ([]*Lease, []error) {
 	return out, problems
 }
 
-// FindInDir returns the leases materialised into dir.
-func FindInDir(leases []*Lease, dir string) []*Lease {
-	var out []*Lease
-	for _, l := range leases {
-		if sameDir(l.Dir, dir) {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
 // FindInScope returns the leases belonging to one place rather than one
 // directory: every target inside the repository rooted at root, or every
 // user-level spawn when scope is global.

@@ -71,7 +71,7 @@ barracks run.`),
 			}
 
 			env.announceSelection(sel)
-			results, err := env.engine.SpawnAll(cmd.Context(), req, sel.Targets)
+			results, err := env.spawnAll(cmd.Context(), req, sel.Targets)
 			if err != nil {
 				return err
 			}

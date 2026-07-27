@@ -112,6 +112,56 @@ func TestLookupAll(t *testing.T) {
 	}
 }
 
+func TestForCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		program string
+		want    string
+	}{
+		{"a bare program name", "claude", "claude"},
+		{"an absolute path resolves on its base name", "/usr/local/bin/claude", "claude"},
+		{"a relative path resolves on its base name", "./bin/claude", "claude"},
+		{"an alias's own CLI", "codex", "agents"},
+		{"an agent whose CLI is not its id", "cursor-agent", "cursor"},
+		{"a shell is not an agent", "sh", ""},
+		{"a wrapper named after nothing known", "my-claude-wrapper", ""},
+		{"a program that merely contains an agent name", "claude-code", ""},
+		{"nothing at all", "", ""},
+		{"whitespace", "   ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ForCommand(tt.program)
+			if tt.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("ForCommand(%q) = %v, want no match - an unrecognised command must never be guessed at", tt.program, got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0].ID != tt.want {
+				t.Fatalf("ForCommand(%q) = %v, want the %q target", tt.program, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBinariesAreDistinct keeps the argv match unambiguous: one program name
+// must never mean two agents.
+func TestBinariesAreDistinct(t *testing.T) {
+	seen := map[string]string{}
+	for _, tgt := range Registry {
+		for _, b := range tgt.Binaries {
+			if b != strings.TrimSpace(b) || b == "" || strings.ContainsRune(b, filepath.Separator) {
+				t.Errorf("target %q declares binary %q; it must be a bare program name", tgt.ID, b)
+			}
+			if prev, dup := seen[b]; dup {
+				t.Errorf("binary %q is claimed by both %q and %q", b, prev, tgt.ID)
+			}
+			seen[b] = tgt.ID
+		}
+	}
+}
+
 func TestDetect(t *testing.T) {
 	root := t.TempDir()
 	if got := Detect(root); len(got) != 0 {
@@ -156,23 +206,28 @@ func TestDetectGlobal(t *testing.T) {
 
 func TestSelectPrecedence(t *testing.T) {
 	detected := []Target{mustLookup(t, "windsurf")}
+	launched := []Target{mustLookup(t, "claude")}
 
 	tests := []struct {
 		name       string
 		override   []string
 		declared   []string
 		detected   []Target
+		launched   []Target
 		want       []string
 		wantOrigin Origin
 	}{
-		{"the flag wins over everything", []string{"cursor"}, []string{"claude"}, detected, []string{"cursor"}, OriginFlag},
-		{"the declaration wins over detection", nil, []string{"claude", "cursor"}, detected, []string{"claude", "cursor"}, OriginLoadout},
-		{"detection wins over the default", nil, nil, detected, []string{"windsurf"}, OriginDetected},
-		{"the default is the last resort", nil, nil, nil, []string{DefaultID}, OriginDefault},
+		{"the flag wins over everything", []string{"cursor"}, []string{"claude"}, detected, launched, []string{"cursor"}, OriginFlag},
+		{"the declaration wins over detection", nil, []string{"claude", "cursor"}, detected, nil, []string{"claude", "cursor"}, OriginLoadout},
+		{"a declaration is not widened by the launched agent", nil, []string{"cursor"}, nil, launched, []string{"cursor"}, OriginLoadout},
+		{"detection wins over the default", nil, nil, detected, nil, []string{"windsurf"}, OriginDetected},
+		{"the launched agent joins what was detected", nil, nil, detected, launched, []string{"claude", "windsurf"}, OriginLaunched},
+		{"the launched agent beats the default", nil, nil, nil, launched, []string{"claude"}, OriginLaunched},
+		{"the default is the last resort", nil, nil, nil, nil, []string{DefaultID}, OriginDefault},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sel, err := Select(tt.override, tt.declared, tt.detected)
+			sel, err := Select(tt.override, tt.declared, tt.detected, tt.launched)
 			if err != nil {
 				t.Fatalf("Select: %v", err)
 			}
@@ -190,12 +245,12 @@ func TestSelectPrecedence(t *testing.T) {
 }
 
 func TestSelectRejectsUnknownIDs(t *testing.T) {
-	if _, err := Select([]string{"emacs"}, nil, nil); err == nil {
+	if _, err := Select([]string{"emacs"}, nil, nil, nil); err == nil {
 		t.Error("an unknown --target should be refused")
 	}
 	// A hand-edited loadout naming a target barracks does not know must say so
 	// clearly rather than silently falling through to the default.
-	_, err := Select(nil, []string{"emacs"}, nil)
+	_, err := Select(nil, []string{"emacs"}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "loadout declares") {
 		t.Errorf("err = %v, want it to name the loadout as the source of the bad target", err)
 	}

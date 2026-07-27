@@ -325,6 +325,16 @@ func TestAssignChangesTheDeclarationAfterwards(t *testing.T) {
 		t.Errorf("assign output = %q, want the resolved targets including the aliased one", out)
 	}
 
+	// What is stored is the canonical ID, not the spelling that was typed, so
+	// the file, `barracks list`, and the command's own output cannot disagree.
+	body, err := os.ReadFile(filepath.Join(h.layout.LoadoutsDir(), "frontend.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "agents") || strings.Contains(string(body), "codex") {
+		t.Errorf("the loadout file stores the raw alias rather than the target it resolves to:\n%s", body)
+	}
+
 	h.mustRun("spawn", "frontend")
 	for _, id := range []string{"cursor", "agents"} {
 		if !testutil.IsSymlink(t, filepath.Join(h.repoDir(t, id), "react")) {
@@ -430,6 +440,152 @@ func TestRunReachesEveryDeclaredTarget(t *testing.T) {
 	}
 	if status := h.work.Status(t); status != statusBefore {
 		t.Errorf("run did not restore git status:\n%s", status)
+	}
+}
+
+// agentScript writes an executable standing in for an agent's own CLI, named
+// exactly as that agent's registry entry declares. It is created outside the
+// repository and invoked by absolute path, which is also how the base-name
+// match is exercised: /some/where/claude must resolve like claude.
+func (h *harness) agentScript(t *testing.T, id, body string) string {
+	t.Helper()
+	tgt, err := target.Lookup(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tgt.Binaries) == 0 {
+		t.Fatalf("target %q declares no binaries to stand in for", id)
+	}
+	return testutil.WriteScript(t, filepath.Join(h.root, "bin", tgt.Binaries[0]), body)
+}
+
+// TestRunEquipsTheAgentItLaunches is the point of `run`: the user names the
+// agent, so the skills must land where that agent reads them even when the
+// repository is set up for a different one.
+func TestRunEquipsTheAgentItLaunches(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"), "--only", "react")
+
+	// This repository looks like a Cursor repository and nothing else.
+	testutil.MkDir(t, h.markerDir(t, "cursor"))
+
+	marker := filepath.Join(h.root, "seen.txt")
+	script := h.agentScript(t, "claude", "ls .claude/skills > "+marker)
+
+	out, errb, err := h.run("run", "frontend", "--", script)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s\n%s", err, out, errb)
+	}
+	seen, rerr := os.ReadFile(marker)
+	if rerr != nil {
+		t.Fatalf("the launched agent could not see its own skills directory: %v", rerr)
+	}
+	if !strings.Contains(string(seen), "react") {
+		t.Errorf("the agent barracks launched did not see the skill:\n%s", seen)
+	}
+	if !strings.Contains(out, "for the agent this command launches") {
+		t.Errorf("run did not say the launched agent decided where the skills went:\n%s", out)
+	}
+	// Detection still contributes; the launched agent joins it, not replaces it.
+	if !strings.Contains(out, "cursor") {
+		t.Errorf("the launched agent should join what the repository uses, not replace it:\n%s", out)
+	}
+	if errb != "" {
+		t.Errorf("nothing here warrants a warning:\n%s", errb)
+	}
+	for _, id := range []string{"claude", "cursor"} {
+		if testutil.Exists(h.repoDir(t, id)) {
+			t.Errorf("run left %s behind", id)
+		}
+	}
+}
+
+// TestRunFallsBackToDetectionForAnUnknownCommand is the other half: a wrapper,
+// a shell, or anything barracks does not recognise must behave exactly as it
+// did before, with no guessing and no warning.
+func TestRunFallsBackToDetectionForAnUnknownCommand(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"), "--only", "react")
+	testutil.MkDir(t, h.markerDir(t, "cursor"))
+
+	marker := filepath.Join(h.root, "seen.txt")
+	out, errb, err := h.run("run", "frontend", "--", "sh", "-c", "ls .cursor/skills > "+marker)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s\n%s", err, out, errb)
+	}
+	seen, rerr := os.ReadFile(marker)
+	if rerr != nil || !strings.Contains(string(seen), "react") {
+		t.Fatalf("an unrecognised command did not fall back to detection: %v\n%s", rerr, seen)
+	}
+	if !strings.Contains(out, "detected in this repository") {
+		t.Errorf("an unrecognised command should still resolve by detection:\n%s", out)
+	}
+	if testutil.Exists(h.repoDir(t, "claude")) {
+		t.Error("an unrecognised command was guessed at and spawned into an agent nobody asked for")
+	}
+	if errb != "" {
+		t.Errorf("an unrecognised command must not warn:\n%s", errb)
+	}
+}
+
+// TestRunWarnsWhenAnExplicitTargetExcludesTheLaunchedAgent covers both forms of
+// explicit choice. Neither is overruled - but starting an agent that cannot see
+// one of the skills just installed is never allowed to happen in silence.
+func TestRunWarnsWhenAnExplicitTargetExcludesTheLaunchedAgent(t *testing.T) {
+	script := func(h *harness, t *testing.T) string {
+		return h.agentScript(t, "claude", "true")
+	}
+
+	tests := []struct {
+		name  string
+		setup func(h *harness)
+		args  []string
+		want  string
+	}{
+		{
+			name:  "a --target flag",
+			setup: func(h *harness) {},
+			args:  []string{"--target", "windsurf"},
+			want:  "windsurf",
+		},
+		{
+			name:  "a loadout declaration",
+			setup: func(h *harness) { h.mustRun("assign", "frontend", "cursor") },
+			args:  nil,
+			want:  "cursor",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.mustRun("train", "frontend")
+			h.mustRun("equip", "frontend", h.sourceArg("skills"), "--only", "react")
+			tt.setup(h)
+
+			args := append([]string{"run", "frontend"}, tt.args...)
+			args = append(args, "--", script(h, t))
+			out, errb, err := h.run(args...)
+			if err != nil {
+				t.Fatalf("run failed: %v\n%s\n%s", err, out, errb)
+			}
+			// Warned about, and named.
+			claude, lerr := target.Lookup("claude")
+			if lerr != nil {
+				t.Fatal(lerr)
+			}
+			if !strings.Contains(errb, claude.Display) {
+				t.Errorf("run did not warn that the launched agent was left out:\n%s", errb)
+			}
+			if !strings.Contains(errb, tt.want) {
+				t.Errorf("the warning does not say where the skills went instead:\n%s", errb)
+			}
+			// And obeyed: the explicit choice stands, argv never widened it.
+			if testutil.Exists(h.repoDir(t, "claude")) {
+				t.Error("argv overruled the user's explicit choice")
+			}
+		})
 	}
 }
 

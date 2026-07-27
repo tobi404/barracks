@@ -39,6 +39,12 @@ type Target struct {
 	// already configured here. They drive detection for a loadout that declares
 	// no targets of its own.
 	Markers []string
+	// Binaries are the program names of this agent's own CLI. `barracks run`
+	// matches the command it is about to launch against them, so a run can
+	// equip the agent it names. It is optional: an entry declaring none simply
+	// never matches a command, which is correct for an agent with no CLI of its
+	// own, or one whose CLI name is not recorded in Docs.
+	Binaries []string
 	// Docs is the primary source these paths were read from. It is printed by
 	// `barracks targets` so a stale entry can be checked without guessing.
 	Docs string
@@ -58,6 +64,7 @@ var Registry = []Target{
 		GlobalFallback: filepath.Join("~", ".claude", "skills"),
 		Unit:           "skill",
 		Markers:        []string{".claude"},
+		Binaries:       []string{"claude"},
 		Docs:           "https://code.claude.com/docs/en/skills",
 	},
 	{
@@ -74,6 +81,7 @@ var Registry = []Target{
 		GlobalFallback: filepath.Join("~", ".agents", "skills"),
 		Unit:           "skill",
 		Markers:        []string{".agents"},
+		Binaries:       []string{"codex"},
 		Docs:           "https://learn.chatgpt.com/docs/build-skills",
 	},
 	{
@@ -84,6 +92,7 @@ var Registry = []Target{
 		GlobalFallback: filepath.Join("~", ".cursor", "skills"),
 		Unit:           "skill",
 		Markers:        []string{".cursor"},
+		Binaries:       []string{"cursor-agent"},
 		Docs:           "https://cursor.com/docs/context/skills",
 	},
 	{
@@ -94,9 +103,13 @@ var Registry = []Target{
 		GlobalFallback: filepath.Join("~", ".config", "opencode", "skills"),
 		Unit:           "skill",
 		Markers:        []string{".opencode"},
+		Binaries:       []string{"opencode"},
 		Docs:           "https://opencode.ai/docs/skills",
 	},
 	{
+		// No Binaries: the doc below documents where Cascade reads skills, not
+		// a terminal CLI to match a `barracks run` command against. Filling one
+		// in from memory is exactly what the Docs field exists to prevent.
 		ID:             "windsurf",
 		Display:        "Windsurf",
 		RepoDir:        filepath.Join(".windsurf", "skills"),
@@ -122,6 +135,11 @@ const (
 	OriginLoadout Origin = "loadout"
 	// OriginDetected means the repository already contains those agents.
 	OriginDetected Origin = "detected"
+	// OriginLaunched means the command being launched is an agent barracks
+	// knows, so that agent joined the selection. It is deliberately distinct
+	// from OriginDetected: "because you are starting Claude Code" and "because
+	// this repository has a .claude directory" are different answers.
+	OriginLaunched Origin = "launched"
 	// OriginDefault means nothing said anything and the default was used.
 	OriginDefault Origin = "default"
 )
@@ -150,6 +168,8 @@ func (s Selection) Reason() string {
 		return "declared by the loadout"
 	case OriginDetected:
 		return "detected in this repository"
+	case OriginLaunched:
+		return "for the agent this command launches"
 	default:
 		return "the default target"
 	}
@@ -196,6 +216,29 @@ func LookupAll(ids []string) ([]Target, error) {
 		out = append(out, t)
 	}
 	return out, nil
+}
+
+// ForCommand returns the target whose own CLI is the given program, matched on
+// the program's base name so "/usr/local/bin/claude" and "./bin/claude" resolve
+// the same way "claude" does.
+//
+// An unrecognised program matches nothing at all. A wrapper script, a shell
+// alias, or `sh -c ...` must fall back to the ordinary rules rather than be
+// guessed at. Which names count is map data, not code: it is the Binaries field
+// of a registry entry, so a new agent's CLI is a new entry like everything else.
+func ForCommand(program string) []Target {
+	base := filepath.Base(strings.TrimSpace(program))
+	if base == "." || base == string(filepath.Separator) {
+		return nil
+	}
+	for _, t := range Registry {
+		for _, b := range t.Binaries {
+			if b == base {
+				return []Target{t}
+			}
+		}
+	}
+	return nil
 }
 
 // Default returns the default target.
@@ -258,10 +301,19 @@ func DetectGlobal(env func(string) string, home func() (string, error)) []Target
 // Select decides which targets a spawn goes into.
 //
 // Precedence, highest first: the flags given to this invocation, the loadout's
-// own declaration, what is already present on disk, and finally the default
-// target. An override never touches the loadout's declaration - it is an
-// argument to one spawn, not an edit.
-func Select(override, declared []string, detected []Target) (Selection, error) {
+// own declaration, what `barracks run` is about to launch together with what is
+// already present on disk, and finally the default target. An override never
+// touches the loadout's declaration - it is an argument to one spawn, not an
+// edit.
+//
+// launched is the agent a `barracks run` command is about to start, empty for
+// every other command. It joins the branch that would otherwise only look at
+// the repository, and never widens an explicit choice: `run` exists to equip a
+// specific agent session, so if the user names the agent and the skills land
+// somewhere it does not read, the command has silently done the opposite of
+// what was asked. That is knowledge `run` has and `spawn` does not, and using
+// it is the point of the command rather than an inconsistency with `spawn`.
+func Select(override, declared []string, detected, launched []Target) (Selection, error) {
 	if len(override) > 0 {
 		ts, err := LookupAll(override)
 		if err != nil {
@@ -280,10 +332,29 @@ func Select(override, declared []string, detected []Target) (Selection, error) {
 			return Selection{Targets: ts, Origin: OriginLoadout}, nil
 		}
 	}
+	if len(launched) > 0 {
+		return Selection{Targets: merge(launched, detected), Origin: OriginLaunched}, nil
+	}
 	if len(detected) > 0 {
 		return Selection{Targets: detected, Origin: OriginDetected}, nil
 	}
 	return Selection{Targets: []Target{Default()}, Origin: OriginDefault}, nil
+}
+
+// merge concatenates target lists, keeping the first occurrence of each target.
+func merge(lists ...[]Target) []Target {
+	seen := map[string]bool{}
+	var out []Target
+	for _, list := range lists {
+		for _, t := range list {
+			if seen[t.ID] {
+				continue
+			}
+			seen[t.ID] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // RepoPath is the skills directory inside the repository rooted at root.

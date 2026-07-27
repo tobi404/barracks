@@ -182,18 +182,6 @@ func TestStoreListIgnoresNonYAML(t *testing.T) {
 	}
 }
 
-func TestFindInDir(t *testing.T) {
-	leases := []*Lease{
-		{ID: "a", Dir: "/repo/.claude/skills"},
-		{ID: "b", Dir: "/repo/.claude/skills/"},
-		{ID: "c", Dir: "/other/.claude/skills"},
-	}
-	got := FindInDir(leases, "/repo/.claude/skills")
-	if len(got) != 2 {
-		t.Fatalf("FindInDir returned %v, want the two leases in that directory", ids(got))
-	}
-}
-
 func ids(ls []*Lease) []string {
 	out := make([]string, len(ls))
 	for i, l := range ls {

@@ -166,11 +166,18 @@ moment the command exits.
 ```bash
 barracks run frontend -- claude
 barracks run review -- claude -p "review this diff"
+barracks run frontend --target cursor -- cursor-agent
 ```
 
 The skills exist for exactly as long as the process does. Ctrl-C is forwarded to the
 command and the loadout is recalled as usual. If barracks itself is killed outright, the
 next barracks command cleans up.
+
+When the command is an agent barracks knows, that agent is equipped even if this repository
+shows no sign of it - `barracks run frontend -- claude` reaches Claude Code whether or not
+`.claude/` exists here. The program is matched on its base name, so `/usr/local/bin/claude`
+counts too; anything else, a wrapper or `sh -c ...` included, falls back to the ordinary
+rules with no guessing. See [Choosing targets](#choosing-targets).
 
 ### Also available
 
@@ -287,20 +294,28 @@ by hand. At spawn time barracks takes the first of these that applies:
 
 1. `--target` given on this invocation - for this spawn only, never written back.
 2. The loadout's own declaration.
-3. Whichever agents already have a configuration directory here (`.cursor/`, `.claude/`,
-   and so on). A global spawn looks at the matching directory in your home instead.
+3. The agent `barracks run` is about to launch, if the command names one barracks knows,
+   together with whichever agents already have a configuration directory here (`.cursor/`,
+   `.claude/`, and so on). A global spawn looks at the matching directory in your home
+   instead.
 4. The default target, `claude`.
 
 When barracks decides for you - case 3 or 4 - it says so before it spawns, so a spawn never
 lands somewhere unexpected in silence.
 
+Only `barracks run` contributes case 3's first half, because it is the only command that
+knows which agent is about to read the skills. It never widens an explicit choice: if
+`--target` or the loadout's declaration leaves out the agent being launched, barracks warns
+and installs where you asked anyway.
+
 ### Adding a target
 
 The mapping lives in one declarative table (`internal/target/target.go`). Paths, aliases,
-detection markers, and the documentation each path came from are all fields on an entry;
-no command logic knows an agent-specific path. Adding another agent is a new entry in that
-table, not a code change - `TestAddingATargetIsDataNotCode` proves it by driving a whole
-spawn/recall lifecycle through an agent invented entirely in the test.
+detection markers, the program names of the agent's own CLI, and the documentation each
+path came from are all fields on an entry; no command logic knows an agent-specific path or
+program name. Adding another agent is a new entry in that table, not a code change -
+`TestAddingATargetIsDataNotCode` proves it by driving a whole spawn/recall lifecycle
+through an agent invented entirely in the test.
 
 ---
 

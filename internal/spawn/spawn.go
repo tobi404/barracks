@@ -283,6 +283,23 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 	return result, nil
 }
 
+// RollbackError is a failed multi-target spawn together with what unwinding the
+// targets it had already created could not undo.
+//
+// The reports travel with the error on purpose: revocation keeps anything it
+// does not recognise as its own, and a caller must not be able to print the
+// failure without also being handed everything the rollback left behind. A
+// rollback that removed an exclude block but kept its symlink would otherwise
+// dirty `git status` in complete silence.
+type RollbackError struct {
+	Err     error
+	Reports []*lease.Report
+}
+
+func (e *RollbackError) Error() string { return e.Err.Error() }
+
+func (e *RollbackError) Unwrap() error { return e.Err }
+
 // SpawnAll materialises the loadout into every target in one go, and is
 // all-or-nothing: if the third target fails, the first two are revoked before
 // the error is returned.
@@ -300,10 +317,13 @@ func (e *Engine) SpawnAll(ctx context.Context, req Request, targets []target.Tar
 		perTarget.Target = tgt
 		res, err := e.Spawn(ctx, perTarget)
 		if err != nil {
+			wrapped := fmt.Errorf("spawn into %s: %w", tgt.Display, err)
+			var reports []*lease.Report
 			for i := len(done) - 1; i >= 0; i-- {
-				lease.Revoke(done[i].Lease, e.Store, e.Leases, "another target in the same spawn failed")
+				reports = append(reports, lease.Revoke(done[i].Lease, e.Store, e.Leases,
+					"another target in the same spawn failed"))
 			}
-			return nil, fmt.Errorf("spawn into %s: %w", tgt.Display, err)
+			return nil, &RollbackError{Err: wrapped, Reports: reports}
 		}
 		done = append(done, res)
 	}

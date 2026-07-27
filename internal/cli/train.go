@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/tobi404/barracks/internal/target"
 )
 
 func newTrainCmd(env *Env) *cobra.Command {
@@ -37,17 +36,18 @@ The definition is a plain YAML file you are welcome to open and edit by hand.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env.reap()
 			name := args[0]
-			// Validate before creating: a loadout left holding a target barracks
+			// Resolve before creating: a loadout left holding a target barracks
 			// cannot resolve would only fail later, at spawn time.
-			if _, err := target.LookupAll(targetIDs); err != nil {
+			declared, err := declaredIDs(targetIDs)
+			if err != nil {
 				return err
 			}
 			l, err := env.loadouts.Create(name, description, env.now())
 			if err != nil {
 				return err
 			}
-			if len(targetIDs) > 0 {
-				l.SetTargets(targetIDs)
+			if len(declared) > 0 {
+				l.SetTargets(declared)
 				if err := env.loadouts.Save(l); err != nil {
 					return err
 				}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -29,13 +30,21 @@ func (e *Env) scopeOf(ctx context.Context, global bool) (spawn.Location, error) 
 // on disk, which wins over the default. Nothing here knows an agent-specific
 // path; detection is driven by the markers each registry entry declares.
 func (e *Env) selectTargets(ctx context.Context, l *loadout.Loadout, override []string, global bool) (target.Selection, error) {
+	return e.selectTargetsFor(ctx, l, override, global, nil)
+}
+
+// selectTargetsFor is selectTargets with the agent a `barracks run` is about to
+// launch, which only that command knows. It changes nothing about precedence:
+// launched agents join the branch that would otherwise only consult the
+// repository, so an explicit --target or loadout declaration is never widened.
+func (e *Env) selectTargetsFor(ctx context.Context, l *loadout.Loadout, override []string, global bool, launched []target.Target) (target.Selection, error) {
 	var detected []target.Target
 	if global {
 		detected = target.DetectGlobal(e.Getenv, e.Home)
 	} else if loc, err := e.scopeOf(ctx, false); err == nil && loc.Root != "" {
 		detected = target.Detect(loc.Root)
 	}
-	return target.Select(override, l.Targets, detected)
+	return target.Select(override, l.Targets, detected, launched)
 }
 
 // announceSelection says which agents were picked whenever the user did not say
@@ -45,6 +54,57 @@ func (e *Env) announceSelection(sel target.Selection) {
 		return
 	}
 	fmt.Fprintf(e.Out, "targets: %s (%s)\n", strings.Join(sel.IDs(), ", "), sel.Reason())
+}
+
+// warnLaunchedAgentExcluded says so when an explicit choice sends the skills
+// somewhere the agent being launched will not look.
+//
+// It only ever warns. A --target flag or a loadout declaration is the user's
+// own decision and barracks does not overrule it - but letting a run start an
+// agent that cannot see a single one of the skills it just installed, without a
+// word, is the failure this exists to prevent.
+func (e *Env) warnLaunchedAgentExcluded(sel target.Selection, launched []target.Target) {
+	if sel.Origin != target.OriginFlag && sel.Origin != target.OriginLoadout {
+		return
+	}
+	chosen := make(map[string]bool, len(sel.Targets))
+	for _, t := range sel.Targets {
+		chosen[t.ID] = true
+	}
+	for _, t := range launched {
+		if chosen[t.ID] {
+			continue
+		}
+		fmt.Fprintf(e.Err, "! %s is not among the selected targets (%s), so it will not see these skills\n",
+			t.Display, strings.Join(sel.IDs(), ", "))
+	}
+}
+
+// spawnAll materialises the loadout into every selected target and surfaces
+// anything an all-or-nothing rollback could not undo.
+//
+// Every other revocation reports what it kept; a rollback is no different, and
+// this is the one place both spawning commands go through.
+func (e *Env) spawnAll(ctx context.Context, req spawn.Request, targets []target.Target) ([]*spawn.Result, error) {
+	results, err := e.engine.SpawnAll(ctx, req, targets)
+	var rollback *spawn.RollbackError
+	if errors.As(err, &rollback) {
+		for _, rep := range rollback.Reports {
+			reportKept(e.Err, rep)
+		}
+	}
+	return results, err
+}
+
+// declaredIDs validates the target spellings a user gave and returns the
+// canonical IDs to store on a loadout, so the YAML file, `barracks list`, and
+// the command's own output can never disagree about where a spawn will go.
+func declaredIDs(ids []string) ([]string, error) {
+	resolved, err := target.LookupAll(ids)
+	if err != nil {
+		return nil, err
+	}
+	return idsOf(resolved), nil
 }
 
 // resolveTargetFilter turns --target flags into the target IDs a command acts
@@ -125,14 +185,15 @@ spawn with --target does not change what is declared here.`),
 				printAssignment(env, l)
 				return nil
 			}
-			if !auto {
-				// Validate before writing: a declaration barracks cannot resolve
-				// would only fail later, at spawn time, far from the mistake.
-				if _, err := target.LookupAll(ids); err != nil {
-					return err
-				}
+			// Resolve before writing: a declaration barracks cannot resolve
+			// would only fail later, at spawn time, far from the mistake, and
+			// what is stored is the canonical ID rather than the spelling that
+			// happened to be typed.
+			declared, err := declaredIDs(ids)
+			if err != nil {
+				return err
 			}
-			l.SetTargets(ids)
+			l.SetTargets(declared)
 			if err := env.loadouts.Save(l); err != nil {
 				return err
 			}

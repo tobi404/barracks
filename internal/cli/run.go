@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tobi404/barracks/internal/lease"
 	"github.com/tobi404/barracks/internal/spawn"
+	"github.com/tobi404/barracks/internal/target"
 )
 
 func newRunCmd(env *Env) *cobra.Command {
@@ -29,6 +30,11 @@ loadout the moment the command exits.
 This is the throwaway-session case: the skills exist for exactly as long as the
 process does, and nothing is left behind afterwards. The loadout reaches every
 agent it installs into, so one run can serve a command that reads more than one.
+
+When the command is an agent barracks knows, that agent is equipped even if the
+repository shows no sign of it - running claude here installs into Claude Code.
+A --target flag or a loadout's own declaration still decides on its own; if it
+leaves out the agent being launched, barracks says so rather than overruling it.
 
   barracks run frontend -- claude
   barracks run review -- claude -p "review this diff"
@@ -53,7 +59,14 @@ outright, the next barracks command reaps the lease.`),
 			if err != nil {
 				return err
 			}
-			sel, err := env.selectTargets(cmd.Context(), l, targetIDs, global)
+			// run is the one command that already knows which agent is about to
+			// read the skills, and equipping that agent's session is the whole
+			// point of it. So the launched program joins target selection - but
+			// only where selection would otherwise be barracks' own guess. An
+			// unrecognised program (a wrapper, `sh -c ...`) matches nothing and
+			// changes nothing.
+			launched := target.ForCommand(argv[0])
+			sel, err := env.selectTargetsFor(cmd.Context(), l, targetIDs, global, launched)
 			if err != nil {
 				return err
 			}
@@ -75,7 +88,8 @@ outright, the next barracks command reaps the lease.`),
 			}
 
 			env.announceSelection(sel)
-			results, err := env.engine.SpawnAll(cmd.Context(), spawn.Request{
+			env.warnLaunchedAgentExcluded(sel, launched)
+			results, err := env.spawnAll(cmd.Context(), spawn.Request{
 				Loadout: l,
 				Global:  global,
 				Cwd:     env.Cwd,

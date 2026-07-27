@@ -684,8 +684,26 @@ func TestSpawnAllIsAllOrNothing(t *testing.T) {
 	testutil.WriteFile(t, filepath.Join(taken, "SKILL.md"), "mine")
 	statusBefore := s.work.Status(t)
 
-	if _, err := s.engine.SpawnAll(ctx(), Request{Loadout: l, Cwd: s.work.Dir}, targets); err == nil {
+	_, err = s.engine.SpawnAll(ctx(), Request{Loadout: l, Cwd: s.work.Dir}, targets)
+	if err == nil {
 		t.Fatal("SpawnAll should fail when one of its targets cannot be spawned")
+	}
+	// The rollback's own outcome travels with the error. Revocation keeps
+	// anything it does not recognise as its own, and a caller that could print
+	// the failure without those reports would hide it.
+	var rollback *RollbackError
+	if !errors.As(err, &rollback) {
+		t.Fatalf("SpawnAll returned %v, want an error carrying what the rollback could not undo", err)
+	}
+	if len(rollback.Reports) != 1 {
+		t.Fatalf("rollback carried %d reports, want one per target it had already created", len(rollback.Reports))
+	}
+	if rollback.Reports[0].Lease.Target != targets[0].ID {
+		t.Errorf("the rollback report names %q, want the target that was rolled back (%q)",
+			rollback.Reports[0].Lease.Target, targets[0].ID)
+	}
+	if !errors.Is(err, ErrOccupied) {
+		t.Errorf("the wrapped cause was lost: %v", err)
 	}
 
 	// The first target is rolled all the way back.
