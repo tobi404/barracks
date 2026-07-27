@@ -200,6 +200,10 @@ longer exists upstream has its symlink removed rather than left dangling, and
 new skills are registered in `.git/info/exclude`, so `git status` stays clean
 before and after.
 
+Upgrading moves a spawn forward along the sources it was made from. A source
+equipped *after* a repo was spawned into is not materialised there by an
+upgrade - run `barracks spawn` again to pick it up.
+
 | Flag | Effect |
 |---|---|
 | `--dry-run` | Report exactly what would change and change nothing |
