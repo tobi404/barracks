@@ -208,6 +208,34 @@ func fromLocalPath(p string) (Source, error) {
 	}, nil
 }
 
+// WithRef returns a copy of s tracking ref, with Raw rewritten to match.
+//
+// It is what `barracks upgrade --pin` uses to turn a moving source into a
+// fixed one. Raw is rebuilt rather than left alone because it is the string the
+// user reads in the loadout YAML; a Raw saying "#main" beside a Ref holding a
+// SHA would be a lie in the one file barracks invites people to hand-edit.
+func (s Source) WithRef(ref string) Source {
+	out := s
+	out.Ref = ref
+
+	base := s.Raw
+	if i := strings.Index(base, "#"); i >= 0 {
+		base = base[:i]
+	}
+	b := &strings.Builder{}
+	b.WriteString(base)
+	if ref != "" || s.Subpath != "" {
+		b.WriteString("#")
+		b.WriteString(ref)
+	}
+	if s.Subpath != "" {
+		b.WriteString(":")
+		b.WriteString(s.Subpath)
+	}
+	out.Raw = b.String()
+	return out
+}
+
 // StoreKey is the store-relative directory for this source at a given commit.
 func (s Source) StoreKey(commit string) string {
 	return filepath.Join(s.Host, filepath.FromSlash(s.Owner), s.Repo+"@"+commit)

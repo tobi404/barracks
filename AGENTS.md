@@ -113,13 +113,15 @@ deliberate decision, not a refactor.
   `recall` undoes every lease in the scope. Commands find leases with `lease.FindInScope`
   (repository root, or all global) rather than one target's directory, which is what makes
   a single recall undo a two-agent spawn.
-- **Revocation never removes what barracks did not create.** `lease.Revoke` removes a
-  recorded path only when it is still a symlink pointing at the exact store directory the
-  lease recorded, and that target is inside the store. Everything else is kept and
-  *reported* - silence is a bug. Directory pruning only touches empty directories the lease
-  recorded creating. That covers the rollback inside `spawn.Engine.SpawnAll` too: it returns
-  a `spawn.RollbackError` carrying every `lease.Report`, and `cli.Env.spawnAll` is the one
-  choke point that prints them with `reportKept`.
+- **Nothing barracks did not create is ever removed or replaced.** The check lives in
+  `lease.InspectLink`: a recorded path is acted on only when it is still a symlink pointing
+  at the exact store directory the lease recorded, and that target is inside the store.
+  Revocation *and* upgrade relinking both go through it; a new mutation path must too.
+  Everything else is kept and *reported* - silence is a bug. Directory pruning only touches
+  empty directories the lease recorded creating. That covers the rollback inside
+  `spawn.Engine.SpawnAll` too: it returns a `spawn.RollbackError` carrying every
+  `lease.Report`, and `cli.Env.spawnAll` is the one choke point that prints them with
+  `reportKept`.
 - **A process lease never trusts a bare PID.** `lease.Owner` carries a start token from
   `internal/proc`; a live PID with a different token is a dead lease. When the prober cannot
   tell, the lease is treated as alive - barracks would rather leak a symlink than delete one
@@ -131,6 +133,13 @@ deliberate decision, not a refactor.
   brought into being.
 - **The store is content-addressed and shared.** `store/<host>/<owner>/<repo>@<commit>/`.
   Exports land in a temp dir and are renamed, so a partial fetch can never look complete.
+  `store.Locate` reads that path back, which is how upgrade tells which source and commit a
+  spawned link belongs to - never the `Source` label on the lease record, which `--pin`
+  rewrites.
+- **`upgrade --dry-run` and a real run must print the same body.** `upgrade.Plan` does every
+  read and decision; `upgrade.Apply` only executes and records failures. Anything that
+  decides at apply time breaks that guarantee. Plan does fetch into the store - a per-skill
+  diff needs both trees - and nothing else.
 
 ## Sharp edges
 
@@ -143,6 +152,9 @@ deliberate decision, not a refactor.
   safe-character regex and would escape the store.
 - On macOS `/tmp` is a symlink to `/private/tmp`, so git-reported repo roots differ from
   `t.TempDir()` paths. Compare against `filepath.EvalSymlinks` output in tests.
+- `upgrade` reconciles spawns onto the commit each source is *pinned at*, not just onto a ref
+  that moved. That is what lets a spawn it deliberately skipped (one held by a live process)
+  be brought forward by a later run instead of being stranded at an old commit forever.
 - When two loadouts spawn into one directory, the second records no created directories.
   `spawn.withInheritedDirs` copies the chain from the existing lease so whichever lease is
   revoked last can finish the cleanup.

@@ -99,6 +99,36 @@ func (s *Store) Ensure(ctx context.Context, src source.Source, commit string) (d
 	return dir, true, nil
 }
 
+// Locate reads a store path back: given a source, it reports which commit of
+// that source the path belongs to and where inside it the path sits.
+//
+// It is what lets an upgrade recognise a spawned link as "this source, but an
+// older commit" without trusting the label recorded beside it. The label is a
+// string that --pin rewrites; the path is a fact.
+func (s *Store) Locate(src source.Source, path string) (commit, rel string, ok bool) {
+	root, err := filepath.Abs(s.Root)
+	if err != nil {
+		return "", "", false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", false
+	}
+	r, err := filepath.Rel(root, filepath.Clean(abs))
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", "", false
+	}
+	prefix := filepath.Join(src.Host, filepath.FromSlash(src.Owner), src.Repo) + "@"
+	if !strings.HasPrefix(r, prefix) {
+		return "", "", false
+	}
+	commit, rest, _ := strings.Cut(r[len(prefix):], string(filepath.Separator))
+	if commit == "" {
+		return "", "", false
+	}
+	return commit, filepath.ToSlash(rest), true
+}
+
 // Contains reports whether p resolves to something inside the store. Revoking a
 // link is only ever allowed when this holds.
 func (s *Store) Contains(p string) bool {

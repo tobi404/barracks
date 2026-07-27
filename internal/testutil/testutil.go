@@ -61,6 +61,29 @@ func (r *GitRepo) AddSkills(t *testing.T, skills ...Skill) {
 	}
 }
 
+// RemovePath deletes a repo-relative path from the work tree without
+// committing, so a test can model a skill disappearing upstream.
+func (r *GitRepo) RemovePath(t *testing.T, rel string) {
+	t.Helper()
+	if err := os.RemoveAll(filepath.Join(r.Dir, filepath.FromSlash(rel))); err != nil {
+		t.Fatalf("remove %s: %v", rel, err)
+	}
+}
+
+// CheckoutNew creates a branch at HEAD and switches to it.
+func (r *GitRepo) CheckoutNew(t *testing.T, branch string) {
+	t.Helper()
+	run(t, r.Dir, "checkout", "-q", "-b", branch)
+	r.Branch = branch
+}
+
+// Checkout switches to an existing branch.
+func (r *GitRepo) Checkout(t *testing.T, branch string) {
+	t.Helper()
+	run(t, r.Dir, "checkout", "-q", branch)
+	r.Branch = branch
+}
+
 // Commit stages everything and commits.
 func (r *GitRepo) Commit(t *testing.T, message string) string {
 	t.Helper()
