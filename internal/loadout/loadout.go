@@ -42,10 +42,31 @@ type Equipment struct {
 
 // Loadout is a named bundle of skill sources.
 type Loadout struct {
-	Name        string      `yaml:"name"`
-	Description string      `yaml:"description,omitempty"`
-	CreatedAt   time.Time   `yaml:"created_at"`
-	Equipment   []Equipment `yaml:"equipment"`
+	Name        string    `yaml:"name"`
+	Description string    `yaml:"description,omitempty"`
+	CreatedAt   time.Time `yaml:"created_at"`
+	// Targets are the agent target IDs this loadout installs into. Empty means
+	// barracks decides at spawn time from what the repository contains. The
+	// choice belongs to the loadout, not to a machine-wide setting, so that one
+	// loadout can be a Cursor loadout and another a Claude Code one.
+	Targets   []string    `yaml:"targets,omitempty"`
+	Equipment []Equipment `yaml:"equipment"`
+}
+
+// SetTargets replaces the declared target list, trimming blanks and repeats.
+// An empty result clears the declaration, returning the loadout to detection.
+func (l *Loadout) SetTargets(ids []string) {
+	var out []string
+	seen := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	l.Targets = out
 }
 
 // Equip attaches eq, replacing any equipment already attached from the same

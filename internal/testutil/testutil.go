@@ -132,6 +132,15 @@ func WriteFile(t *testing.T, path, content string) {
 	}
 }
 
+// MkDir creates a directory and its parents. Tests use it to plant the
+// configuration directories barracks detects targets by.
+func MkDir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+}
+
 // IsSymlink reports whether path is a symbolic link.
 func IsSymlink(t *testing.T, path string) bool {
 	t.Helper()

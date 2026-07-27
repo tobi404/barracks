@@ -22,8 +22,22 @@ These are the reasons the design looks the way it does. Changing any of them nee
 deliberate decision, not a refactor.
 
 - **Target paths live only in `internal/target/target.go`.** No command logic may spell out
-  `.claude/skills` or any agent path. Supporting a new agent is a new `Registry` entry.
-  `TestRegistryIsExercised` enforces that at least two entries exist.
+  `.claude/skills` or any agent path. Paths, aliases, detection markers, and the primary
+  source each path came from are all fields on a `Registry` entry, so supporting a new agent
+  is a new entry. `TestRegistryIsExercised` guards the entry shape;
+  `cli.TestAddingATargetIsDataNotCode` drives a full lifecycle through an agent invented
+  purely in the test, and is the real proof the claim still holds.
+- **Every registry path is quoted from that agent's own current documentation**, recorded in
+  the entry's `Docs` field. These conventions move; do not fill one in from memory. Every
+  supported agent consumes the same artifact - a directory containing a `SKILL.md` - so
+  barracks never translates a skill into another format. An agent that wants a different
+  artifact (a rule file with its own extension and frontmatter) is a product decision, not a
+  map edit: report it rather than inventing a conversion.
+- **A spawn reaches every target the loadout installs into, and is all-or-nothing.**
+  `spawn.Engine.SpawnAll` revokes what it already created if a later target fails, and one
+  `recall` undoes every lease in the scope. Commands find leases with `lease.FindInScope`
+  (repository root, or all global) rather than one target's directory, which is what makes
+  a single recall undo a two-agent spawn.
 - **Revocation never removes what barracks did not create.** `lease.Revoke` removes a
   recorded path only when it is still a symlink pointing at the exact store directory the
   lease recorded, and that target is inside the store. Everything else is kept and

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/tobi404/barracks/internal/target"
 )
 
 // Version is stamped at build time.
@@ -60,14 +59,10 @@ removed, and spawning leaves git status clean.`),
 		newDeployedCmd(env),
 		newRunCmd(env),
 		newDisbandCmd(env),
+		newAssignCmd(env),
 		newTargetsCmd(env),
 	)
 	return root
-}
-
-// targetFlagHelp keeps every command's --target help in sync with the map.
-func targetFlagHelp() string {
-	return fmt.Sprintf("agent to deploy for (%s)", strings.Join(target.IDs(), ", "))
 }
 
 // Main is the process entry point shared by both binaries.

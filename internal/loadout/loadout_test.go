@@ -340,3 +340,62 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+func TestSetTargets(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"plain list", []string{"claude", "cursor"}, []string{"claude", "cursor"}},
+		{"repeats collapse", []string{"claude", "claude"}, []string{"claude"}},
+		{"blanks are dropped", []string{" ", "claude", ""}, []string{"claude"}},
+		{"surrounding space is trimmed", []string{" cursor "}, []string{"cursor"}},
+		{"an empty list clears the declaration", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := &Loadout{Name: "x", Targets: []string{"stale"}}
+			l.SetTargets(tt.in)
+			if strings.Join(l.Targets, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("SetTargets(%v) = %v, want %v", tt.in, l.Targets, tt.want)
+			}
+		})
+	}
+}
+
+// TestTargetsSurviveARoundTrip is what makes the declaration belong to the
+// loadout: it is written into the hand-editable YAML, not held in memory.
+func TestTargetsSurviveARoundTrip(t *testing.T) {
+	s := newStore(t)
+	l, err := s.Create("frontend", "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.SetTargets([]string{"cursor", "windsurf"})
+	if err := s.Save(l); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Get("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.Targets, ",") != "cursor,windsurf" {
+		t.Errorf("targets after a round trip = %v, want cursor,windsurf", got.Targets)
+	}
+
+	// And a loadout with no declaration writes no targets key at all, so the
+	// file stays as plain as it was before targets existed.
+	bare, err := s.Create("bare", "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(s.Dir, bare.Name+".yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "targets:") {
+		t.Errorf("a loadout declaring no targets wrote a targets key:\n%s", b)
+	}
+}

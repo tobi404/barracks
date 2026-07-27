@@ -5,10 +5,14 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tobi404/barracks/internal/target"
 )
 
 func newTrainCmd(env *Env) *cobra.Command {
-	var description string
+	var (
+		description string
+		targetIDs   []string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "train <name>",
@@ -20,24 +24,42 @@ A loadout is a named bundle of agent skills. Training one only creates its
 definition - it has no skills until you equip it with a source, and it does
 nothing to any repo until you spawn it.
 
+Use --target to declare which agents it installs into. A loadout that declares
+nothing is detected per repository at spawn time, and the declaration can be
+changed later with barracks assign.
+
 The definition is a plain YAML file you are welcome to open and edit by hand.
 
   barracks train frontend
-  barracks train review --description "Skills for reviewing pull requests"`),
+  barracks train review --description "Skills for reviewing pull requests"
+  barracks train editor --target cursor --target windsurf`),
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env.reap()
 			name := args[0]
+			// Validate before creating: a loadout left holding a target barracks
+			// cannot resolve would only fail later, at spawn time.
+			if _, err := target.LookupAll(targetIDs); err != nil {
+				return err
+			}
 			l, err := env.loadouts.Create(name, description, env.now())
 			if err != nil {
 				return err
 			}
+			if len(targetIDs) > 0 {
+				l.SetTargets(targetIDs)
+				if err := env.loadouts.Save(l); err != nil {
+					return err
+				}
+			}
 			fmt.Fprintf(env.Out, "trained loadout %q\n", l.Name)
+			printAssignment(env, l)
 			fmt.Fprintf(env.Out, "  equip it with:  barracks equip %s gh:owner/repo\n", l.Name)
 			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&description, "description", "d", "", "what this loadout is for")
+	cmd.Flags().StringSliceVar(&targetIDs, "target", nil, targetFlagHelp("install into"))
 	return cmd
 }
 

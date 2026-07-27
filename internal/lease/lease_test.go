@@ -201,3 +201,41 @@ func ids(ls []*Lease) []string {
 	}
 	return out
 }
+
+func TestFindInScope(t *testing.T) {
+	leases := []*Lease{
+		{ID: "claude-here", Scope: ScopeRepo, Root: "/repo", Dir: "/repo/.claude/skills", Target: "claude"},
+		{ID: "cursor-here", Scope: ScopeRepo, Root: "/repo/", Dir: "/repo/.cursor/skills", Target: "cursor"},
+		{ID: "other-repo", Scope: ScopeRepo, Root: "/other", Dir: "/other/.claude/skills", Target: "claude"},
+		{ID: "global", Scope: ScopeGlobal, Dir: "/home/me/.claude/skills", Target: "claude"},
+	}
+
+	// One repository, every agent in it: that is what makes a single recall
+	// undo a spawn that reached two targets.
+	got := FindInScope(leases, ScopeRepo, "/repo")
+	if strings.Join(ids(got), ",") != "claude-here,cursor-here" {
+		t.Errorf("FindInScope(repo) = %v, want both agents in that repo and nothing else", ids(got))
+	}
+
+	got = FindInScope(leases, ScopeGlobal, "")
+	if strings.Join(ids(got), ",") != "global" {
+		t.Errorf("FindInScope(global) = %v, want only the user-level spawn", ids(got))
+	}
+}
+
+func TestWithTargets(t *testing.T) {
+	leases := []*Lease{
+		{ID: "a", Target: "claude"},
+		{ID: "b", Target: "cursor"},
+	}
+	if got := WithTargets(leases, nil); len(got) != 2 {
+		t.Errorf("WithTargets with no filter = %v, want every lease", ids(got))
+	}
+	got := WithTargets(leases, []string{"cursor"})
+	if strings.Join(ids(got), ",") != "b" {
+		t.Errorf("WithTargets(cursor) = %v, want only the cursor lease", ids(got))
+	}
+	if got := WithTargets(leases, []string{"windsurf"}); len(got) != 0 {
+		t.Errorf("WithTargets on an unused target = %v, want nothing", ids(got))
+	}
+}

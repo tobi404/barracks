@@ -283,6 +283,33 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 	return result, nil
 }
 
+// SpawnAll materialises the loadout into every target in one go, and is
+// all-or-nothing: if the third target fails, the first two are revoked before
+// the error is returned.
+//
+// A loadout that installs into two agents is one user action, so a half-done
+// result would be worse than no result - the user would have to work out which
+// half happened before retrying.
+func (e *Engine) SpawnAll(ctx context.Context, req Request, targets []target.Target) ([]*Result, error) {
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("no target to spawn %s into", req.Loadout.Name)
+	}
+	var done []*Result
+	for _, tgt := range targets {
+		perTarget := req
+		perTarget.Target = tgt
+		res, err := e.Spawn(ctx, perTarget)
+		if err != nil {
+			for i := len(done) - 1; i >= 0; i-- {
+				lease.Revoke(done[i].Lease, e.Store, e.Leases, "another target in the same spawn failed")
+			}
+			return nil, fmt.Errorf("spawn into %s: %w", tgt.Display, err)
+		}
+		done = append(done, res)
+	}
+	return done, nil
+}
+
 // unwinder undoes a partially completed spawn.
 type unwinder struct {
 	links   []string

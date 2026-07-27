@@ -430,7 +430,11 @@ func TestSpawnGlobalUsesTheTargetMap(t *testing.T) {
 		want   string
 	}{
 		{"claude", "claude", filepath.Join(h.home, ".claude", "skills", "react")},
-		{"opencode", "opencode", filepath.Join(h.home, ".config", "opencode", "skill", "react")},
+		{"agents", "agents", filepath.Join(h.home, ".agents", "skills", "react")},
+		{"codex is an alias for agents", "codex", filepath.Join(h.home, ".agents", "skills", "react")},
+		{"cursor", "cursor", filepath.Join(h.home, ".cursor", "skills", "react")},
+		{"opencode", "opencode", filepath.Join(h.home, ".config", "opencode", "skills", "react")},
+		{"windsurf", "windsurf", filepath.Join(h.home, ".codeium", "windsurf", "skills", "react")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -697,7 +701,7 @@ func TestHelpUsesTheRTSVocabulary(t *testing.T) {
 	h := newHarness(t)
 
 	root := h.mustRun("--help")
-	for _, want := range []string{"train", "equip", "spawn", "recall", "deployed", "list", "run"} {
+	for _, want := range []string{"train", "equip", "spawn", "recall", "deployed", "list", "run", "assign", "targets"} {
 		if !strings.Contains(root, want) {
 			t.Errorf("root help does not mention %q:\n%s", want, root)
 		}
@@ -714,6 +718,8 @@ func TestHelpUsesTheRTSVocabulary(t *testing.T) {
 		{"deployed", []string{"deployed in this repo", "reaps expired leases"}},
 		{"list", []string{"loadout", "barracks list"}},
 		{"run", []string{"recalls the", "process identity", "barracks run"}},
+		{"assign", []string{"belongs to the loadout", "--auto", "barracks assign"}},
+		{"targets", []string{"documentation those paths were read from", "barracks assign", "present here"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.command, func(t *testing.T) {

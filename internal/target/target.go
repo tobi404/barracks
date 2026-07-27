@@ -15,9 +15,15 @@ import (
 )
 
 // Target describes one agent's skill layout.
+//
+// Every field is data. Detection, aliases, and the primary source each path was
+// taken from all live here, so a new agent never requires new code.
 type Target struct {
 	// ID is the value users pass to --target.
 	ID string
+	// Aliases are other names that resolve to this target, for agents that
+	// share a directory convention under a different product name.
+	Aliases []string
 	// Display is the agent's human name, used in output.
 	Display string
 	// RepoDir is the skills directory relative to a repository root.
@@ -29,13 +35,20 @@ type Target struct {
 	GlobalFallback string
 	// Unit names what a directory under the skills dir is, for output.
 	Unit string
+	// Markers are repository-relative paths whose presence means this agent is
+	// already configured here. They drive detection for a loadout that declares
+	// no targets of its own.
+	Markers []string
+	// Docs is the primary source these paths were read from. It is printed by
+	// `barracks targets` so a stale entry can be checked without guessing.
+	Docs string
 }
 
 // Registry is the declarative target map.
 //
-// Claude Code is the target barracks is verified against end to end. OpenCode
-// is declared alongside it so the abstraction is genuinely exercised rather
-// than being a single-entry pretence.
+// Every entry consumes the same artifact barracks produces: a directory holding
+// a SKILL.md. That is not an assumption - each path below was read from the
+// agent's own current documentation, recorded in Docs.
 var Registry = []Target{
 	{
 		ID:             "claude",
@@ -44,31 +57,145 @@ var Registry = []Target{
 		GlobalDir:      filepath.Join("~", ".claude", "skills"),
 		GlobalFallback: filepath.Join("~", ".claude", "skills"),
 		Unit:           "skill",
+		Markers:        []string{".claude"},
+		Docs:           "https://code.claude.com/docs/en/skills",
+	},
+	{
+		// The cross-agent convention. Codex reads .agents/skills from the
+		// working directory up to the repository root and $HOME/.agents/skills
+		// for the user; opencode and Cursor read the same two locations. One
+		// spawn here reaches all of them, which is why it carries the codex
+		// alias rather than Codex having an entry of its own.
+		ID:             "agents",
+		Aliases:        []string{"codex"},
+		Display:        "AGENTS.md agents (Codex, opencode, Cursor)",
+		RepoDir:        filepath.Join(".agents", "skills"),
+		GlobalDir:      filepath.Join("~", ".agents", "skills"),
+		GlobalFallback: filepath.Join("~", ".agents", "skills"),
+		Unit:           "skill",
+		Markers:        []string{".agents"},
+		Docs:           "https://learn.chatgpt.com/docs/build-skills",
+	},
+	{
+		ID:             "cursor",
+		Display:        "Cursor",
+		RepoDir:        filepath.Join(".cursor", "skills"),
+		GlobalDir:      filepath.Join("~", ".cursor", "skills"),
+		GlobalFallback: filepath.Join("~", ".cursor", "skills"),
+		Unit:           "skill",
+		Markers:        []string{".cursor"},
+		Docs:           "https://cursor.com/docs/context/skills",
 	},
 	{
 		ID:             "opencode",
 		Display:        "OpenCode",
-		RepoDir:        filepath.Join(".opencode", "skill"),
-		GlobalDir:      filepath.Join("${XDG_CONFIG_HOME}", "opencode", "skill"),
-		GlobalFallback: filepath.Join("~", ".config", "opencode", "skill"),
+		RepoDir:        filepath.Join(".opencode", "skills"),
+		GlobalDir:      filepath.Join("${XDG_CONFIG_HOME}", "opencode", "skills"),
+		GlobalFallback: filepath.Join("~", ".config", "opencode", "skills"),
 		Unit:           "skill",
+		Markers:        []string{".opencode"},
+		Docs:           "https://opencode.ai/docs/skills",
+	},
+	{
+		ID:             "windsurf",
+		Display:        "Windsurf",
+		RepoDir:        filepath.Join(".windsurf", "skills"),
+		GlobalDir:      filepath.Join("~", ".codeium", "windsurf", "skills"),
+		GlobalFallback: filepath.Join("~", ".codeium", "windsurf", "skills"),
+		Unit:           "skill",
+		Markers:        []string{".windsurf"},
+		Docs:           "https://docs.devin.ai/desktop/cascade/skills",
 	},
 }
 
-// DefaultID is the target used when --target is not given.
+// DefaultID is the target used when nothing else says otherwise: no --target,
+// no loadout declaration, and nothing detected in the repository.
 const DefaultID = "claude"
 
-// Lookup finds a target by ID. An empty id yields the default target.
+// Origin records why a set of targets was chosen, so a spawn can say so.
+type Origin string
+
+const (
+	// OriginFlag means the invocation named the targets explicitly.
+	OriginFlag Origin = "flag"
+	// OriginLoadout means the loadout declared them.
+	OriginLoadout Origin = "loadout"
+	// OriginDetected means the repository already contains those agents.
+	OriginDetected Origin = "detected"
+	// OriginDefault means nothing said anything and the default was used.
+	OriginDefault Origin = "default"
+)
+
+// Selection is a resolved set of targets and the reason it was chosen.
+type Selection struct {
+	Targets []Target
+	Origin  Origin
+}
+
+// IDs of the selection, in order.
+func (s Selection) IDs() []string {
+	out := make([]string, 0, len(s.Targets))
+	for _, t := range s.Targets {
+		out = append(out, t.ID)
+	}
+	return out
+}
+
+// Reason renders the origin as a short phrase for command output.
+func (s Selection) Reason() string {
+	switch s.Origin {
+	case OriginFlag:
+		return "given on the command line"
+	case OriginLoadout:
+		return "declared by the loadout"
+	case OriginDetected:
+		return "detected in this repository"
+	default:
+		return "the default target"
+	}
+}
+
+// Lookup finds a target by ID or alias. An empty id yields the default target.
 func Lookup(id string) (Target, error) {
-	if strings.TrimSpace(id) == "" {
+	id = strings.TrimSpace(id)
+	if id == "" {
 		id = DefaultID
 	}
 	for _, t := range Registry {
 		if t.ID == id {
 			return t, nil
 		}
+		for _, alias := range t.Aliases {
+			if alias == id {
+				return t, nil
+			}
+		}
 	}
 	return Target{}, fmt.Errorf("unknown target %q (known targets: %s)", id, strings.Join(IDs(), ", "))
+}
+
+// LookupAll resolves a list of IDs, keeping the given order and dropping
+// repeats. Two spellings of one target - an ID and its alias - collapse to a
+// single entry, because spawning the same directory twice would collide.
+func LookupAll(ids []string) ([]Target, error) {
+	var out []Target
+	seen := map[string]bool{}
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		t, err := Lookup(id)
+		if err != nil {
+			return nil, err
+		}
+		if seen[t.ID] {
+			continue
+		}
+		seen[t.ID] = true
+		out = append(out, t)
+	}
+	return out, nil
 }
 
 // Default returns the default target.
@@ -80,7 +207,8 @@ func Default() Target {
 	return t
 }
 
-// IDs lists every declared target ID, sorted.
+// IDs lists every declared target ID, sorted. Aliases are not listed; they are
+// spellings of an ID, not targets of their own.
 func IDs() []string {
 	out := make([]string, 0, len(Registry))
 	for _, t := range Registry {
@@ -88,6 +216,74 @@ func IDs() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Detect returns the targets whose markers are present under root, registry
+// order preserved.
+//
+// This is how a loadout that declares nothing avoids guessing: a repository
+// with a .cursor directory is a repository where Cursor is in use.
+func Detect(root string) []Target {
+	var out []Target
+	for _, t := range Registry {
+		for _, m := range t.Markers {
+			if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(m))); err == nil {
+				out = append(out, t)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// DetectGlobal returns the targets whose user-level skills directory already
+// has a parent on disk - the agent's own config directory.
+//
+// It needs no extra map data: the global location is already declared, and its
+// parent is the directory the agent creates when it is installed.
+func DetectGlobal(env func(string) string, home func() (string, error)) []Target {
+	var out []Target
+	for _, t := range Registry {
+		dir, err := t.GlobalPath(env, home)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Dir(dir)); err == nil {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// Select decides which targets a spawn goes into.
+//
+// Precedence, highest first: the flags given to this invocation, the loadout's
+// own declaration, what is already present on disk, and finally the default
+// target. An override never touches the loadout's declaration - it is an
+// argument to one spawn, not an edit.
+func Select(override, declared []string, detected []Target) (Selection, error) {
+	if len(override) > 0 {
+		ts, err := LookupAll(override)
+		if err != nil {
+			return Selection{}, err
+		}
+		if len(ts) > 0 {
+			return Selection{Targets: ts, Origin: OriginFlag}, nil
+		}
+	}
+	if len(declared) > 0 {
+		ts, err := LookupAll(declared)
+		if err != nil {
+			return Selection{}, fmt.Errorf("loadout declares a target barracks does not know: %w", err)
+		}
+		if len(ts) > 0 {
+			return Selection{Targets: ts, Origin: OriginLoadout}, nil
+		}
+	}
+	if len(detected) > 0 {
+		return Selection{Targets: detected, Origin: OriginDetected}, nil
+	}
+	return Selection{Targets: []Target{Default()}, Origin: OriginDefault}, nil
 }
 
 // RepoPath is the skills directory inside the repository rooted at root.

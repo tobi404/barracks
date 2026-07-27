@@ -9,7 +9,7 @@ Today that means hand-copying directories and losing track of what came from whe
 barracks makes a skill set a named, versioned, spawnable unit.
 
 ```bash
-barracks train frontend                                    # define a loadout
+barracks train frontend --target claude,cursor             # define a loadout
 barracks equip frontend gh:owner/skills#main:skills        # attach a source
 barracks spawn frontend                                    # materialise it here
 barracks run frontend -- claude                            # or just for one session
@@ -25,7 +25,9 @@ barracks run frontend -- claude                            # or just for one ses
 | Learn the commands | [Commands](#commands) |
 | Understand source syntax | [Source syntax](#source-syntax) |
 | Know what it touches on disk | [What it does to your repo](#what-it-does-to-your-repo) |
-| Add support for another agent | [Targets](#targets) |
+| See which agents are supported | [Targets](#targets) |
+| Choose which agents a loadout installs into | [Choosing targets](#choosing-targets) |
+| Add support for another agent | [Adding a target](#adding-a-target) |
 | Work on barracks itself | [Development](#development) |
 
 ---
@@ -60,10 +62,24 @@ until you spawn it.
 ```bash
 barracks train frontend
 barracks train review --description "Skills for reviewing pull requests"
+barracks train editor --target cursor --target windsurf
 ```
+
+`--target` declares which agents the loadout installs into - see
+[Choosing targets](#choosing-targets). Leave it out and barracks decides per repository.
 
 The definition is a plain YAML file under `~/.barracks/loadouts/`. Open and edit it by
 hand whenever you like.
+
+### `barracks assign <loadout> [target...]`
+
+Changes which agents a loadout installs into, after training.
+
+```bash
+barracks assign frontend                  # show the current declaration
+barracks assign frontend claude cursor    # install into both from now on
+barracks assign frontend --auto           # clear it and detect per repository
+```
 
 ### `barracks equip <loadout> <source>`
 
@@ -88,16 +104,21 @@ alongside.
 
 ### `barracks spawn <loadout>`
 
-Materialises the loadout into the agent's skills directory in the current repo. Skills are
-symlinked from the shared store, so spawning is instant and every repo on your machine
+Materialises the loadout into the skills directory of every agent it installs into. Skills
+are symlinked from the shared store, so spawning is instant and every repo on your machine
 shares one copy on disk.
 
 ```bash
 barracks spawn frontend                    # until you recall it
 barracks spawn frontend --for 2h           # until the clock runs out
-barracks spawn frontend --global           # into your user-level skills directory
-barracks spawn frontend --target opencode  # for a different agent
+barracks spawn frontend --global           # into your user-level skills directories
+barracks spawn frontend --target opencode  # just this once, for a different agent
 ```
+
+A loadout declaring two agents reaches both in this one command. A `--target` given here
+applies to this spawn only and never changes what the loadout declares. If any one target
+fails, the whole spawn is rolled back - a two-agent spawn is one action, so it never half
+happens.
 
 ### `barracks recall <loadout>`
 
@@ -105,8 +126,12 @@ Removes a spawned loadout, leaving the repo exactly as it was.
 
 ```bash
 barracks recall frontend
+barracks recall frontend --target cursor   # leave the other agents alone
 barracks recall --all
 ```
+
+One recall undoes one spawn: a loadout that went into two agents comes out of both. Narrow
+that with `--target` when you want to keep one.
 
 Recall removes only the symlinks the spawn recorded, and only after confirming each is
 still a symlink pointing into the barracks store. Anything else - a real file, a directory,
@@ -114,10 +139,13 @@ a symlink you re-pointed - is left alone and reported.
 
 ### `barracks deployed`
 
-Shows what is currently spawned here, and how each one ends.
+Shows what is currently spawned here, which agent each one went into, and how each one
+ends. The same loadout spawned into two agents shows up once per agent.
 
 ```bash
 barracks deployed
+barracks deployed --target cursor
+barracks deployed --global       # your user-level skills directories
 barracks deployed --everywhere   # every live spawn on this machine
 ```
 
@@ -147,7 +175,8 @@ next barracks command cleans up.
 ### Also available
 
 `barracks disband <name>` deletes a loadout definition, refusing while it is still
-deployed. `barracks targets` lists the agents barracks can deploy to.
+deployed. `barracks targets` lists the agents barracks can deploy to and marks the ones
+this repository is already set up for.
 
 ---
 
@@ -221,16 +250,57 @@ everything.
 
 ## Targets
 
-barracks deploys to whichever agent you point it at. The mapping lives in a single
-declarative table (`internal/target/target.go`); no command logic knows an agent-specific
-path.
+A target is one agent's skills directory. Every supported agent reads the same artifact
+barracks produces - a directory containing a `SKILL.md` - so nothing is translated or
+rewritten on the way in.
 
-| Target | In a repo | Global |
-|---|---|---|
-| `claude` (default) | `.claude/skills/` | `~/.claude/skills/` |
-| `opencode` | `.opencode/skill/` | `$XDG_CONFIG_HOME/opencode/skill/` |
+| Target | In a repo | Global | Read by |
+|---|---|---|---|
+| `claude` (default) | `.claude/skills/` | `~/.claude/skills/` | [Claude Code](https://code.claude.com/docs/en/skills) |
+| `agents` (alias `codex`) | `.agents/skills/` | `~/.agents/skills/` | [Codex](https://learn.chatgpt.com/docs/build-skills), opencode, Cursor |
+| `cursor` | `.cursor/skills/` | `~/.cursor/skills/` | [Cursor](https://cursor.com/docs/context/skills) |
+| `opencode` | `.opencode/skills/` | `$XDG_CONFIG_HOME/opencode/skills/` | [OpenCode](https://opencode.ai/docs/skills) |
+| `windsurf` | `.windsurf/skills/` | `~/.codeium/windsurf/skills/` | [Windsurf](https://docs.devin.ai/desktop/cascade/skills) |
 
-Adding another agent is a new entry in that table, not a code change.
+`barracks targets` prints this table for your machine, with the resolved global path, the
+documentation each path was read from, and which agents are already configured in the
+repository you are standing in.
+
+`agents` is the cross-agent convention rather than one product: Codex reads `.agents/skills`
+from the working directory up to the repository root and `~/.agents/skills` for the user,
+and opencode and Cursor read the same two locations. One spawn there reaches all of them,
+which is why Codex has no separate entry.
+
+### Choosing targets
+
+The choice belongs to the loadout, not to a machine-wide setting - one loadout can be a
+Cursor loadout while another is a Claude Code one.
+
+```bash
+barracks train editor --target cursor --target windsurf   # at training time
+barracks assign editor cursor windsurf                    # or change it later
+barracks assign editor --auto                             # or hand it back to detection
+```
+
+The declaration is a `targets:` list in the loadout's YAML file, so it can also be edited
+by hand. At spawn time barracks takes the first of these that applies:
+
+1. `--target` given on this invocation - for this spawn only, never written back.
+2. The loadout's own declaration.
+3. Whichever agents already have a configuration directory here (`.cursor/`, `.claude/`,
+   and so on). A global spawn looks at the matching directory in your home instead.
+4. The default target, `claude`.
+
+When barracks decides for you - case 3 or 4 - it says so before it spawns, so a spawn never
+lands somewhere unexpected in silence.
+
+### Adding a target
+
+The mapping lives in one declarative table (`internal/target/target.go`). Paths, aliases,
+detection markers, and the documentation each path came from are all fields on an entry;
+no command logic knows an agent-specific path. Adding another agent is a new entry in that
+table, not a code change - `TestAddingATargetIsDataNotCode` proves it by driving a whole
+spawn/recall lifecycle through an agent invented entirely in the test.
 
 ---
 
@@ -250,5 +320,5 @@ sources at those paths.
 
 ## Not built yet
 
-The committed/shared tier with a lockfile, `barracks upgrade`, additional target families,
-and release packaging are separately queued.
+The committed/shared tier with a lockfile, `barracks upgrade`, and release packaging are
+separately queued.
