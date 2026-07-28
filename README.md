@@ -468,7 +468,8 @@ It is decoration, so it keeps out of the way of everything that matters:
   no flag is needed to get that.
 - **Only on stderr**, so `barracks list | grep react` is never polluted even interactively.
 - **Never on a failure**, and never from a command that only reports - `list`, `deployed`,
-  `inspect` and `targets` say nothing.
+  `inspect` and `targets` say nothing, and neither does a preview like
+  `upgrade --dry-run`, which also leaves the unit as fresh as it found it.
 
 Turn it off for one command with `--quiet` (`-q`), or for good with `BARRACKS_QUIET=1`.
 

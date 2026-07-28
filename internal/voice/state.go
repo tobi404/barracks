@@ -77,10 +77,35 @@ func load(path string) state {
 	return st
 }
 
+// save replaces the state file in one step: a temp file beside it, then a
+// rename. Two barracks invocations can easily overlap - a long `barracks run`
+// in one shell and a `spawn` in another - and a truncating write leaves a
+// window in which either of them reads half a file. Rename has no such window,
+// so the worst an overlap can cost is one invocation's escalation.
 func save(path string, st state) {
 	data, err := yaml.Marshal(st)
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(path, data, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(path), StateFile+".*")
+	if err != nil {
+		return
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return
+	}
+	if err := os.Chmod(name, 0o644); err != nil {
+		_ = os.Remove(name)
+		return
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+	}
 }

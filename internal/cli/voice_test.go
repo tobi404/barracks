@@ -292,6 +292,49 @@ func TestRepeatingACommandEscalatesThenResets(t *testing.T) {
 	}
 }
 
+// TestAPreviewNeitherSpeaksNorEscalates: a command that by design changes
+// nothing has nothing to acknowledge. Staying silent is only half of it - a
+// preview that still spent an escalation step would answer the first genuine
+// change with the wearier line, which is the same falsehood with the evidence
+// hidden.
+func TestAPreviewNeitherSpeaksNorEscalates(t *testing.T) {
+	h := equipped(t)
+	h.rnd = func() uint64 { return 0 }
+
+	_, errb, err := h.run("upgrade", "frontend", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry run: %v\n%s", err, errb)
+	}
+	if got := flavor(errb); got != nil {
+		t.Errorf("a preview spoke: %v", got)
+	}
+	h.now = h.now.Add(time.Second)
+
+	_, errb, err = h.run("upgrade", "frontend")
+	if err != nil {
+		t.Fatalf("upgrade: %v\n%s", err, errb)
+	}
+	afterPreview := flavor(errb)
+	if len(afterPreview) != 1 {
+		t.Fatalf("want one flavor line, got %d:\n%s", len(afterPreview), errb)
+	}
+
+	// What a genuinely first upgrade says is what the one after a preview must
+	// have said, so the quiet window gives us that line to compare against.
+	h.now = h.now.Add(voice.Window)
+	_, errb, err = h.run("upgrade", "frontend")
+	if err != nil {
+		t.Fatalf("upgrade: %v\n%s", err, errb)
+	}
+	fresh := flavor(errb)
+	if len(fresh) != 1 {
+		t.Fatalf("want one flavor line, got %d:\n%s", len(fresh), errb)
+	}
+	if afterPreview[0] != fresh[0] {
+		t.Errorf("the command after a preview said %q, want the fresh %q", afterPreview[0], fresh[0])
+	}
+}
+
 // TestEscalationIsPerLoadout: pestering one loadout must not make another one
 // weary.
 func TestEscalationIsPerLoadout(t *testing.T) {

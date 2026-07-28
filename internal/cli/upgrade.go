@@ -53,6 +53,9 @@ says to run "barracks garrison <loadout> --force" if you meant to replace it.
   barracks upgrade frontend --pin`),
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if dryRun {
+				env.previews()
+			}
 			env.reap()
 
 			targets, err := selectLoadouts(env, args)

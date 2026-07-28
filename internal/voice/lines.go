@@ -38,7 +38,7 @@ var pools = map[string][]step{
 	"equip": {
 		{"Kit issued.", "Sharpening up.", "The quartermaster obliges."},
 		{"Back for more kit.", "Back at the armory.", "The quartermaster sighs."},
-		{"...the pack is heavy.", "Carrying plenty already.", "Little room left."},
+		{"...the pack is heavy.", "Loaded up once more.", "Little room left."},
 		{"Hands are full!", "No more crates.", "The straps are creaking."},
 	},
 	"spawn": {
@@ -51,7 +51,7 @@ var pools = map[string][]step{
 		{"Falling back.", "Standing down.", "Marching home."},
 		{"Falling back once more.", "Back down the road.", "Homeward, again."},
 		{"...back again already.", "The road home is worn.", "Marching back and forth."},
-		{"Nothing but marching!", "Recalling the wind.", "The road again!"},
+		{"Nothing but marching!", "Turned around again!", "The road again!"},
 	},
 	"upgrade": {
 		{"To the depot.", "Off to the quartermaster.", "The runner sets out."},
@@ -62,7 +62,7 @@ var pools = map[string][]step{
 	"garrison": {
 		{"Manning the walls.", "Colors planted.", "Settling into the fort."},
 		{"The walls are manned.", "The colors are up.", "Quarters are taken."},
-		{"...the same wall.", "The stones have not moved.", "A long watch."},
+		{"...the same wall.", "Posted here again.", "A long watch."},
 		{"The wall is manned!", "Still this same gate!", "The same stones again."},
 	},
 	"run": {

@@ -227,7 +227,13 @@ deliberate decision, not a refactor.
 - **The voice is decoration and must never become information.** `internal/voice` owns the
   lines; which commands speak *is* the pool map, so a command with no entry is silent by
   construction rather than by an `if`. Every reason to stay quiet is gathered in
-  `cli.Env.speak` - a new gate belongs there, never at a call site. It writes to stderr only,
+  `cli.Env.speak` - a new gate belongs there, never at a call site, and every gate is checked
+  *before* `voice.Speaker.Line`, which is what spends an escalation step. That is why a
+  command that by design changes nothing declares itself a preview (`cli.Env.previews`, set
+  by `upgrade --dry-run`) rather than being recognised by flag name: silencing a preview that
+  still counted would answer the first real change with the wearier line. It is not a "did
+  anything change" rule - an upgrade that finds every source current did the work and speaks.
+  It writes to stderr only,
   only when stdout is a character device (`cli.stdoutIsTerminal`), and only from cobra's
   `PersistentPostRun`, which cobra skips once `RunE` has returned an error: that is what makes
   "never on a failure" structural. Nothing about the escalation state may affect anything but

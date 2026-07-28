@@ -51,6 +51,7 @@ type Env struct {
 	garrisons *garrison.Engine
 	speaker   *voice.Speaker
 	place     string
+	preview   bool
 }
 
 func (e *Env) now() time.Time {
@@ -101,7 +102,7 @@ func (e *Env) init() error {
 // impossible for it to reach anything that is reading barracks rather than
 // watching it.
 func (e *Env) speak(command, subject string) {
-	if e.speaker == nil || !e.isTerminal() || e.voiceOffByEnv() {
+	if e.speaker == nil || e.preview || !e.isTerminal() || e.voiceOffByEnv() {
 		return
 	}
 	line := e.speaker.Line(command, subject, e.place)
@@ -115,6 +116,20 @@ func (e *Env) speak(command, subject string) {
 
 func (e *Env) isTerminal() bool {
 	return e.Tty != nil && e.Tty()
+}
+
+// previews marks this invocation as one that by design changes nothing, so it
+// neither speaks nor spends an escalation step. Both halves matter: a preview
+// that stayed silent but still counted would answer the first real change with
+// the wearier line and leave no trace of why.
+//
+// A command declares this for itself, exactly as it declares where it acted -
+// so any future flag that turns a command into a report is covered by saying so
+// rather than by teaching the voice about one flag's name. It is not a "did
+// anything actually change" test: an upgrade that finds every source already
+// current did the work and still speaks.
+func (e *Env) previews() {
+	e.preview = true
 }
 
 // actedIn records where a repository-scoped command did its work, so the flavor
