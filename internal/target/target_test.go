@@ -47,6 +47,20 @@ func TestRegistryIsExercised(t *testing.T) {
 				t.Errorf("target %q: marker %q must be relative to the repository root", tgt.ID, m)
 			}
 		}
+		// A shared-read claim is a fact about somebody else's product, so it
+		// carries its own source for the same reason the paths do.
+		for _, r := range tgt.AlsoReadBy {
+			if r.Docs == "" {
+				t.Errorf("target %q claims %q reads it with no source to check that against", tgt.ID, r.Target)
+			}
+			if r.Target == tgt.ID {
+				t.Errorf("target %q lists itself in AlsoReadBy; an entry always reaches its own agent", tgt.ID)
+			}
+			// The canonical ID, not an alias: IsReadBy compares resolved IDs.
+			if got, err := Lookup(r.Target); err != nil || got.ID != r.Target {
+				t.Errorf("target %q claims to be read by %q, which is not a target id: %v", tgt.ID, r.Target, err)
+			}
+		}
 	}
 	if !seen[DefaultID] {
 		t.Errorf("default target %q is not in the registry", DefaultID)
@@ -142,6 +156,57 @@ func TestForCommand(t *testing.T) {
 				t.Fatalf("ForCommand(%q) = %v, want the %q target", tt.program, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestIsReadBy covers the question that decides whether a warning is printed,
+// which is not the question ForCommand answers.
+func TestIsReadBy(t *testing.T) {
+	agents := mustLookup(t, "agents")
+	opencode := mustLookup(t, "opencode")
+	cursor := mustLookup(t, "cursor")
+	claude := mustLookup(t, "claude")
+
+	if !agents.IsReadBy(agents) {
+		t.Error("a target must always reach its own agent")
+	}
+	// The shared convention, which is the whole reason the field exists.
+	if !agents.IsReadBy(opencode) || !agents.IsReadBy(cursor) {
+		t.Error("the shared agents directory is read by opencode and Cursor, per the sources on the entry")
+	}
+	// And it is one-directional: opencode's own directory is not the shared one.
+	if opencode.IsReadBy(agents) {
+		t.Error("a shared-read claim must not be assumed to hold in reverse")
+	}
+	if agents.IsReadBy(claude) || claude.IsReadBy(agents) {
+		t.Error("Claude Code and the shared agents directory make no claim about each other")
+	}
+
+	if !AnyReadBy([]Target{claude, agents}, cursor) {
+		t.Error("AnyReadBy should find the one selected target that reaches the agent")
+	}
+	if AnyReadBy([]Target{claude}, cursor) {
+		t.Error("AnyReadBy reported a reach nothing in the map claims")
+	}
+	if AnyReadBy(nil, cursor) {
+		t.Error("nothing selected reaches nothing")
+	}
+}
+
+// TestSharedReadDoesNotChangeSelection is the regression guard for keeping the
+// two questions apart: declaring that the shared directory is read by opencode
+// must not make a launched opencode resolve to it.
+func TestSharedReadDoesNotChangeSelection(t *testing.T) {
+	launched := ForCommand("opencode")
+	if len(launched) != 1 || launched[0].ID != "opencode" {
+		t.Fatalf("ForCommand(opencode) = %v, want the dedicated opencode target", launched)
+	}
+	sel, err := Select(nil, nil, nil, launched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(sel.IDs(), ",") != "opencode" {
+		t.Errorf("Select for a launched opencode = %v, want just its own target", sel.IDs())
 	}
 }
 

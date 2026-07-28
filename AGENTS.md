@@ -35,6 +35,13 @@ deliberate decision, not a refactor.
   barracks warns on stderr and obeys the user. An unrecognised program (a wrapper, `sh -c`)
   matches nothing and must behave exactly as it did before. `Binaries` is optional: leave it
   empty rather than filling in a CLI name the entry's `Docs` does not record.
+- **"Which target does this agent get" and "would this agent see what is already going
+  there" are separate queries.** `target.ForCommand` answers the first and decides where
+  files land; `Target.IsReadBy` / `target.AnyReadBy` answer the second and decide only
+  whether `warnLaunchedAgentExcluded` prints. Never widen the first to fix the second - that
+  moves a spawn in order to change a message. `AlsoReadBy` is what makes the second exact
+  for a convention several products share on purpose, and each claim carries its own `Docs`
+  because it is a fact about somebody else's tool; leave a claim out rather than guess it.
 - **Every registry path is quoted from that agent's own current documentation**, recorded in
   the entry's `Docs` field. These conventions move; do not fill one in from memory. Every
   supported agent consumes the same artifact - a directory containing a `SKILL.md` - so

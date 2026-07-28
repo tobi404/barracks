@@ -63,19 +63,21 @@ func (e *Env) announceSelection(sel target.Selection) {
 // own decision and barracks does not overrule it - but letting a run start an
 // agent that cannot see a single one of the skills it just installed, without a
 // word, is the failure this exists to prevent.
+//
+// The test is whether any selected target is read by the launched agent, not
+// whether the launched agent's own target was selected. Some conventions are
+// shared on purpose, so an ID comparison would fire on a correct invocation and
+// assert something untrue - and a warning that goes off when nothing is wrong
+// teaches the user to ignore it, which is worse than never warning at all.
 func (e *Env) warnLaunchedAgentExcluded(sel target.Selection, launched []target.Target) {
 	if sel.Origin != target.OriginFlag && sel.Origin != target.OriginLoadout {
 		return
 	}
-	chosen := make(map[string]bool, len(sel.Targets))
-	for _, t := range sel.Targets {
-		chosen[t.ID] = true
-	}
 	for _, t := range launched {
-		if chosen[t.ID] {
+		if target.AnyReadBy(sel.Targets, t) {
 			continue
 		}
-		fmt.Fprintf(e.Err, "! %s is not among the selected targets (%s), so it will not see these skills\n",
+		fmt.Fprintf(e.Err, "! %s does not read any of the selected targets (%s), so it will not see these skills\n",
 			t.Display, strings.Join(sel.IDs(), ", "))
 	}
 }
@@ -276,6 +278,9 @@ installed into it.
 				fmt.Fprintf(env.Out, "    global:   %s\n", global)
 				if t.Docs != "" {
 					fmt.Fprintf(env.Out, "    docs:     %s\n", t.Docs)
+				}
+				for _, r := range t.AlsoReadBy {
+					fmt.Fprintf(env.Out, "    also read by %s (%s)\n", displayOf(r.Target), r.Docs)
 				}
 			}
 			fmt.Fprintf(env.Out, "\n* default target\n")

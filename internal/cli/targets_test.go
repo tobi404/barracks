@@ -222,7 +222,11 @@ func TestAddingATargetIsDataNotCode(t *testing.T) {
 		GlobalFallback: filepath.Join("~", ".hypothetical", "agent-skills"),
 		Unit:           "skill",
 		Markers:        []string{".hypothetical"},
-		Docs:           "https://example.invalid/docs/skills",
+		Binaries:       []string{"hypothetical-cli"},
+		AlsoReadBy: []target.Reader{
+			{Target: "claude", Docs: "https://example.invalid/docs/skills"},
+		},
+		Docs: "https://example.invalid/docs/skills",
 	})
 
 	h := newHarness(t)
@@ -264,6 +268,45 @@ func TestAddingATargetIsDataNotCode(t *testing.T) {
 	if testutil.Exists(filepath.Join(h.work.Dir, ".hypothetical")) {
 		t.Error("recall from a map-only target left its directory behind")
 	}
+
+	// Argv matching is map data too. Nothing here is set up for this agent, but
+	// launching its own CLI - by absolute path - equips it anyway.
+	h.mustRun("assign", "experiment", "--auto")
+	marker := filepath.Join(h.root, "seen.txt")
+	own := testutil.WriteScript(t, filepath.Join(h.root, "bin", "hypothetical-cli"),
+		"ls .hypothetical/agent-skills > "+marker+" 2>/dev/null; exit 0")
+
+	out, errb, err := h.run("run", "experiment", "--", own)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s\n%s", err, out, errb)
+	}
+	if seen, rerr := os.ReadFile(marker); rerr != nil || !strings.Contains(string(seen), "react") {
+		t.Errorf("a map-only agent did not see its own skills: %v\n%s", rerr, seen)
+	}
+	if !strings.Contains(out, "for the agent this command launches") {
+		t.Errorf("the launched-agent rule did not reach a map-only entry:\n%s", out)
+	}
+	if errb != "" {
+		t.Errorf("nothing here warrants a warning:\n%s", errb)
+	}
+
+	// And so is the shared-read claim: this entry says Claude Code reads its
+	// directory, so launching claude into it must not be warned about, while an
+	// entry making no such claim about this agent still is.
+	claude := h.agentScript(t, "claude", "true")
+	if _, errb, err = h.run("run", "experiment", "--target", "hypothetical", "--", claude); err != nil {
+		t.Fatalf("run failed: %v\n%s", err, errb)
+	}
+	if errb != "" {
+		t.Errorf("a shared-read claim declared purely in the map did not suppress the warning:\n%s", errb)
+	}
+	if _, errb, err = h.run("run", "experiment", "--target", "claude", "--", own); err != nil {
+		t.Fatalf("run failed: %v\n%s", err, errb)
+	}
+	if !strings.Contains(errb, "Hypothetical Agent") {
+		t.Errorf("the warning stopped firing where no claim reaches the launched agent:\n%s", errb)
+	}
+
 	if got := h.work.ReadExclude(t); got != excludeBefore {
 		t.Errorf(".git/info/exclude not restored\n got: %q\nwant: %q", got, excludeBefore)
 	}
@@ -586,6 +629,62 @@ func TestRunWarnsWhenAnExplicitTargetExcludesTheLaunchedAgent(t *testing.T) {
 				t.Error("argv overruled the user's explicit choice")
 			}
 		})
+	}
+}
+
+// TestRunDoesNotWarnWhenASelectedTargetServesTheLaunchedAgent covers the one
+// family that overlaps on purpose. Installing into the shared directory does
+// reach opencode, so saying otherwise would be a warning about nothing - and a
+// warning that fires on correct usage is one the user learns to ignore.
+func TestRunDoesNotWarnWhenASelectedTargetServesTheLaunchedAgent(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"), "--only", "react")
+
+	marker := filepath.Join(h.root, "seen.txt")
+	script := h.agentScript(t, "opencode", "ls .agents/skills > "+marker)
+
+	out, errb, err := h.run("run", "frontend", "--target", "agents", "--", script)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s\n%s", err, out, errb)
+	}
+	if errb != "" {
+		t.Errorf("run warned that an agent cannot see skills it does in fact read:\n%s", errb)
+	}
+	// The claim the suppression rests on is true: the skills really are there.
+	if seen, rerr := os.ReadFile(marker); rerr != nil || !strings.Contains(string(seen), "react") {
+		t.Errorf("the shared directory did not hold the skills after all: %v\n%s", rerr, seen)
+	}
+	// Only the warning changed; the explicit choice is still exactly obeyed.
+	if testutil.Exists(h.repoDir(t, "opencode")) {
+		t.Error("the shared-read claim widened the explicit --target")
+	}
+}
+
+// TestLaunchedOpencodeStillSelectsItsOwnTarget is the regression guard for
+// keeping the two questions apart. The shared entry declares that opencode
+// reads it, which decides warnings only - it must never pull a launched
+// opencode away from its own dedicated target.
+func TestLaunchedOpencodeStillSelectsItsOwnTarget(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"), "--only", "react")
+
+	marker := filepath.Join(h.root, "seen.txt")
+	script := h.agentScript(t, "opencode", "ls .opencode/skills > "+marker)
+
+	out, errb, err := h.run("run", "frontend", "--", script)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s\n%s", err, out, errb)
+	}
+	if seen, rerr := os.ReadFile(marker); rerr != nil || !strings.Contains(string(seen), "react") {
+		t.Fatalf("a launched opencode was not equipped through its own target: %v\n%s", rerr, seen)
+	}
+	if !strings.Contains(out, "targets: opencode ") {
+		t.Errorf("selection for a launched opencode changed; it must stay its own target:\n%s", out)
+	}
+	if strings.Contains(out, "agents") {
+		t.Errorf("a launched opencode was pulled into the shared directory:\n%s", out)
 	}
 }
 

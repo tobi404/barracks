@@ -305,17 +305,27 @@ lands somewhere unexpected in silence.
 
 Only `barracks run` contributes case 3's first half, because it is the only command that
 knows which agent is about to read the skills. It never widens an explicit choice: if
-`--target` or the loadout's declaration leaves out the agent being launched, barracks warns
-and installs where you asked anyway.
+`--target` or the loadout's declaration installs nowhere the agent being launched reads,
+barracks warns and installs where you asked anyway. Targets that share a directory count -
+`--target agents -- opencode` installs somewhere opencode does read, so nothing is warned
+about.
 
 ### Adding a target
 
 The mapping lives in one declarative table (`internal/target/target.go`). Paths, aliases,
-detection markers, the program names of the agent's own CLI, and the documentation each
-path came from are all fields on an entry; no command logic knows an agent-specific path or
-program name. Adding another agent is a new entry in that table, not a code change -
-`TestAddingATargetIsDataNotCode` proves it by driving a whole spawn/recall lifecycle
-through an agent invented entirely in the test.
+detection markers, the program names of the agent's own CLI, which other agents read the
+same directory, and the documentation each of those came from are all fields on an entry;
+no command logic knows an agent-specific path or program name. Adding another agent is a
+new entry in that table, not a code change - `TestAddingATargetIsDataNotCode` proves it by
+driving a whole spawn/recall lifecycle, an argv match, and a shared-read claim through an
+agent invented entirely in the test.
+
+Two questions the table answers are kept apart on purpose. *Which target does this agent
+get?* decides where files land. *Would this agent see what is already going there?* decides
+only whether `barracks run` prints its warning - it is what stops the warning firing on a
+correct `barracks run frontend --target agents -- opencode`. Each shared-read claim carries
+its own documentation link, shown by `barracks targets`, because it is a fact about
+somebody else's tool and will drift like any other.
 
 ---
 

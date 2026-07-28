@@ -45,8 +45,26 @@ type Target struct {
 	// never matches a command, which is correct for an agent with no CLI of its
 	// own, or one whose CLI name is not recorded in Docs.
 	Binaries []string
+	// AlsoReadBy names the other agents that read this entry's directory as
+	// well, for a convention deliberately shared by several products. It answers
+	// only "does installing here reach that agent", never "which target should
+	// this agent get": those two questions must not share a code path, or
+	// fixing a message would quietly move where skills land.
+	AlsoReadBy []Reader
 	// Docs is the primary source these paths were read from. It is printed by
 	// `barracks targets` so a stale entry can be checked without guessing.
+	Docs string
+}
+
+// Reader is another agent that reads a target's skills directory too.
+//
+// A shared convention is a fact about somebody else's product and drifts like
+// any other, so each claim carries the primary source that establishes it. A
+// claim with no source to attribute is left out rather than guessed at.
+type Reader struct {
+	// Target is the registry ID of the entry for that agent.
+	Target string
+	// Docs is the primary source for this particular claim.
 	Docs string
 }
 
@@ -82,7 +100,11 @@ var Registry = []Target{
 		Unit:           "skill",
 		Markers:        []string{".agents"},
 		Binaries:       []string{"codex"},
-		Docs:           "https://learn.chatgpt.com/docs/build-skills",
+		AlsoReadBy: []Reader{
+			{Target: "opencode", Docs: "https://opencode.ai/docs/skills"},
+			{Target: "cursor", Docs: "https://cursor.com/docs/context/skills"},
+		},
+		Docs: "https://learn.chatgpt.com/docs/build-skills",
 	},
 	{
 		ID:             "cursor",
@@ -239,6 +261,36 @@ func ForCommand(program string) []Target {
 		}
 	}
 	return nil
+}
+
+// IsReadBy reports whether skills installed into t are also read by the agent
+// behind other.
+//
+// This is deliberately not the inverse of ForCommand and must never be folded
+// into it. ForCommand answers "which target does this agent get", which decides
+// where files land; this answers "would this agent see what is already going
+// there", which decides only whether a message is worth printing. Widening the
+// first to serve the second would move a spawn in order to fix a warning.
+func (t Target) IsReadBy(other Target) bool {
+	if t.ID == other.ID {
+		return true
+	}
+	for _, r := range t.AlsoReadBy {
+		if r.Target == other.ID {
+			return true
+		}
+	}
+	return false
+}
+
+// AnyReadBy reports whether any of targets is read by the agent behind other.
+func AnyReadBy(targets []Target, other Target) bool {
+	for _, t := range targets {
+		if t.IsReadBy(other) {
+			return true
+		}
+	}
+	return false
 }
 
 // Default returns the default target.
