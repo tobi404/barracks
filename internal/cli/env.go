@@ -8,6 +8,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/tobi404/barracks/internal/garrison"
@@ -18,6 +19,7 @@ import (
 	"github.com/tobi404/barracks/internal/proc"
 	"github.com/tobi404/barracks/internal/spawn"
 	"github.com/tobi404/barracks/internal/store"
+	"github.com/tobi404/barracks/internal/voice"
 )
 
 // Env is the injectable environment a barracks invocation runs in.
@@ -32,11 +34,21 @@ type Env struct {
 	Getenv func(string) string
 	Home   func() (string, error)
 
+	// Tty reports whether stdout is a terminal. It is what keeps the flavor
+	// line out of pipes, redirects and CI without anyone passing a flag. A nil
+	// Tty means "not a terminal", so a test sees no flavor unless it asks for
+	// it deliberately.
+	Tty func() bool
+	// Rand picks between a step's interchangeable flavor lines. Tests set it to
+	// make the choice deterministic.
+	Rand func() uint64
+
 	loadouts  *loadout.Store
 	leases    *lease.Store
 	store     *store.Store
 	engine    *spawn.Engine
 	garrisons *garrison.Engine
+	speaker   *voice.Speaker
 }
 
 func (e *Env) now() time.Time {
@@ -72,7 +84,51 @@ func (e *Env) init() error {
 		Now:      e.now,
 		Loadouts: e.loadouts,
 	}
+	e.speaker = &voice.Speaker{
+		Path: voice.StatePath(e.Layout.Data),
+		Now:  e.now,
+		Rand: e.Rand,
+	}
 	return nil
+}
+
+// speak prints the flavor line for a command that has just succeeded.
+//
+// Every reason to stay quiet is gathered here, and all of them are checked
+// before a single byte is written: the line is decoration, so it must be
+// impossible for it to reach anything that is reading barracks rather than
+// watching it.
+func (e *Env) speak(command, subject string) {
+	if e.speaker == nil || !e.isTerminal() || e.voiceOffByEnv() {
+		return
+	}
+	line := e.speaker.Line(command, subject)
+	if line == "" {
+		return
+	}
+	// stderr, always: `barracks list | grep react` must never see this, and
+	// neither must anything parsing the report the command just printed.
+	fmt.Fprintf(e.Err, "  %s %s\n", voice.Marker, line)
+}
+
+func (e *Env) isTerminal() bool {
+	return e.Tty != nil && e.Tty()
+}
+
+// EnvQuiet turns the flavor line off permanently, for anyone who wants it gone
+// rather than gone-for-this-invocation.
+const EnvQuiet = "BARRACKS_QUIET"
+
+func (e *Env) voiceOffByEnv() bool {
+	if e.Getenv == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(e.Getenv(EnvQuiet))) {
+	case "", "0", "false", "no":
+		return false
+	default:
+		return true
+	}
 }
 
 // reap runs the lazy reaper. Every command calls this before its own work: an

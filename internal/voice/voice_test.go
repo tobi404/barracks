@@ -1,0 +1,215 @@
+package voice
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func newSpeaker(t *testing.T, now *time.Time, pick uint64) *Speaker {
+	t.Helper()
+	return &Speaker{
+		Path: StatePath(t.TempDir()),
+		Now:  func() time.Time { return *now },
+		Rand: func() uint64 { return pick },
+	}
+}
+
+// TestSilentCommandsHaveNoPool is the whole "which commands speak" rule: a
+// command speaks because it has a pool, and the data-only commands have none.
+func TestSilentCommandsHaveNoPool(t *testing.T) {
+	speaks := []string{"train", "equip", "spawn", "recall", "upgrade", "garrison", "run"}
+	silent := []string{"list", "deployed", "inspect", "targets", "assign", "disband", "barracks", ""}
+
+	for _, c := range speaks {
+		if !Speaks(c) {
+			t.Errorf("%s should speak", c)
+		}
+	}
+	for _, c := range silent {
+		if Speaks(c) {
+			t.Errorf("%s should stay silent", c)
+		}
+	}
+
+	now := time.Now()
+	s := newSpeaker(t, &now, 0)
+	for _, c := range silent {
+		if got := s.Line(c, "frontend"); got != "" {
+			t.Errorf("Line(%q) = %q, want no line", c, got)
+		}
+	}
+}
+
+// TestEscalationClimbsThenResets is acceptance criterion 5.
+func TestEscalationClimbsThenResets(t *testing.T) {
+	now := time.Now()
+	s := newSpeaker(t, &now, 0)
+
+	var seen []string
+	for i := 0; i < steps+2; i++ {
+		seen = append(seen, s.Line("spawn", "frontend"))
+		now = now.Add(time.Second)
+	}
+
+	pool := pools["spawn"]
+	for i := 0; i < steps; i++ {
+		if seen[i] != pool[i][0] {
+			t.Errorf("repeat %d said %q, want the step-%d line %q", i, seen[i], i, pool[i][0])
+		}
+	}
+	// Past the last step it stays put-upon rather than wrapping back to fresh.
+	for i := steps; i < len(seen); i++ {
+		if seen[i] != pool[steps-1][0] {
+			t.Errorf("repeat %d said %q, want it held at the last step %q", i, seen[i], pool[steps-1][0])
+		}
+	}
+
+	// A quiet period puts it back at the top.
+	now = now.Add(Window)
+	if got := s.Line("spawn", "frontend"); got != pool[0][0] {
+		t.Errorf("after the quiet window: %q, want a fresh %q", got, pool[0][0])
+	}
+}
+
+// TestEscalationIsPerCommandAndLoadout keeps one loadout's pestering from
+// making another loadout weary.
+func TestEscalationIsPerCommandAndLoadout(t *testing.T) {
+	now := time.Now()
+	s := newSpeaker(t, &now, 0)
+
+	s.Line("spawn", "frontend")
+	s.Line("spawn", "frontend")
+
+	if got, want := s.Line("spawn", "backend"), pools["spawn"][0][0]; got != want {
+		t.Errorf("a different loadout said %q, want a fresh %q", got, want)
+	}
+	if got, want := s.Line("recall", "frontend"), pools["recall"][0][0]; got != want {
+		t.Errorf("a different command said %q, want a fresh %q", got, want)
+	}
+}
+
+// TestStateDoesNotGrowForever: the file only ever holds keys still inside the
+// window, so a machine that spawns a thousand loadouts over a week does not
+// accumulate a thousand records.
+func TestStateDoesNotGrowForever(t *testing.T) {
+	now := time.Now()
+	s := newSpeaker(t, &now, 0)
+
+	for i := 0; i < 50; i++ {
+		s.Line("spawn", string(rune('a'+i%26))+string(rune('a'+i/26)))
+		now = now.Add(Window)
+	}
+	st := load(s.Path)
+	if len(st.Records) != 1 {
+		t.Fatalf("state holds %d records, want only the one still inside the window", len(st.Records))
+	}
+}
+
+// TestPickVariesWithinAStep proves the pools are pools: the same step can say
+// more than one thing.
+func TestPickVariesWithinAStep(t *testing.T) {
+	now := time.Now()
+	pool := pools["train"][0]
+	for i := range pool {
+		s := newSpeaker(t, &now, uint64(i))
+		if got, want := s.Line("train", "x"), pool[i]; got != want {
+			t.Errorf("pick %d said %q, want %q", i, got, want)
+		}
+	}
+	// An arbitrarily large source still lands inside the pool.
+	s := newSpeaker(t, &now, ^uint64(0))
+	if got := s.Line("train", "x"); !contains(pool, got) {
+		t.Errorf("line %q is not in the step's pool", got)
+	}
+}
+
+// TestBrokenStateCostsOnlyTheEscalation: flavor must never be the reason a
+// command misbehaves, so every state failure degrades to a fresh line.
+func TestBrokenStateCostsOnlyTheEscalation(t *testing.T) {
+	dir := t.TempDir()
+	corrupt := filepath.Join(dir, StateFile)
+	if err := os.WriteFile(corrupt, []byte("{{ not yaml"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	cases := map[string]string{
+		"corrupt file":   corrupt,
+		"no path at all": "",
+		"unwritable dir": filepath.Join(dir, "does", "not", "exist", StateFile),
+	}
+	for name, path := range cases {
+		s := &Speaker{Path: path, Now: func() time.Time { return now }, Rand: func() uint64 { return 0 }}
+		if got, want := s.Line("spawn", "frontend"), pools["spawn"][0][0]; got != want {
+			t.Errorf("%s: %q, want a fresh %q", name, got, want)
+		}
+	}
+}
+
+// TestZeroSpeakerWorks: the defaults are real, not placeholders.
+func TestZeroSpeakerWorks(t *testing.T) {
+	var s Speaker
+	if got := s.Line("spawn", "frontend"); !contains(pools["spawn"][0], got) {
+		t.Errorf("zero Speaker said %q, want a step-0 spawn line", got)
+	}
+	if got := s.Line("list", "frontend"); got != "" {
+		t.Errorf("zero Speaker said %q for a silent command", got)
+	}
+}
+
+// TestLinesMeetTheHouseStyle guards the bar the pools were written to. A line
+// that drifts long, or starts explaining itself, stops being a voice.
+func TestLinesMeetTheHouseStyle(t *testing.T) {
+	// Words the unit must never reach for: it talks about itself and its task,
+	// never about the reader or the machinery.
+	banned := []string{"you", "your", "file", "files", "skill", "skills", "path", "flag", "repo", "loadout", "barracks", "success", "successfully"}
+
+	seen := map[string]string{}
+	for command, pool := range pools {
+		if len(pool) != steps {
+			t.Errorf("%s has %d steps, want %d", command, len(pool), steps)
+		}
+		for i, st := range pool {
+			if len(st) == 0 {
+				t.Errorf("%s step %d is empty", command, i)
+			}
+			for _, line := range st {
+				where := command + " step " + string(rune('0'+i))
+				words := strings.Fields(line)
+				if n := len(words); n < 2 || n > 5 {
+					t.Errorf("%s: %q is %d words, want 2-5", where, line, n)
+				}
+				for _, w := range words {
+					if banned := bannedWord(w, banned); banned != "" {
+						t.Errorf("%s: %q reaches outside the world with %q", where, line, banned)
+					}
+				}
+				if prev, dup := seen[line]; dup {
+					t.Errorf("%s repeats a line already used by %s: %q", where, prev, line)
+				}
+				seen[line] = where
+			}
+		}
+	}
+}
+
+func bannedWord(word string, banned []string) string {
+	w := strings.ToLower(strings.Trim(word, ".!?,'\""))
+	for _, b := range banned {
+		if w == b {
+			return b
+		}
+	}
+	return ""
+}
+
+func contains(pool []string, line string) bool {
+	for _, l := range pool {
+		if l == line {
+			return true
+		}
+	}
+	return false
+}

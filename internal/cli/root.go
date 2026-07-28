@@ -22,6 +22,8 @@ func (e *ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code
 
 // New builds the barracks command tree bound to env.
 func New(env *Env) *cobra.Command {
+	var quiet bool
+
 	root := &cobra.Command{
 		Use:   "barracks",
 		Short: "Train, equip, and spawn loadouts of agent skills",
@@ -54,10 +56,22 @@ versions with no barracks installed.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			return env.init()
 		},
+		// Cobra skips every PostRun once RunE has returned an error, which is
+		// exactly the guarantee the flavor line needs: it can only ever follow
+		// a command that succeeded, and it lands after the real report because
+		// this runs after RunE has finished writing it.
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			if quiet {
+				return
+			}
+			env.speak(cmd.Name(), subjectOf(args))
+		},
 	}
 	root.SetOut(env.Out)
 	root.SetErr(env.Err)
 	root.CompletionOptions.DisableDefaultCmd = true
+	root.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false,
+		"suppress the flavor line printed after a successful command (see also "+EnvQuiet+")")
 
 	root.AddCommand(
 		newTrainCmd(env),
@@ -75,6 +89,16 @@ versions with no barracks installed.
 		newTargetsCmd(env),
 	)
 	return root
+}
+
+// subjectOf is what the escalation counts repeats of: the loadout the command
+// acted on. A command that named none - `barracks upgrade`, `barracks recall
+// --all` - is its own subject.
+func subjectOf(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 // Main is the process entry point shared by both binaries.

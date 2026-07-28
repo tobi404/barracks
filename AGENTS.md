@@ -224,6 +224,18 @@ deliberate decision, not a refactor.
   stranded, and a no-op upgrade still leaves the repository clean. `upgrade` deliberately has
   no `--force`: a locally edited vendored file stops the committed half and barracks names
   `barracks garrison <loadout> --force` instead of growing a second spelling of it.
+- **The voice is decoration and must never become information.** `internal/voice` owns the
+  lines; which commands speak *is* the pool map, so a command with no entry is silent by
+  construction rather than by an `if`. Every reason to stay quiet is gathered in
+  `cli.Env.speak` - a new gate belongs there, never at a call site. It writes to stderr only,
+  only when stdout is a character device (`cli.stdoutIsTerminal`), and only from cobra's
+  `PersistentPostRun`, which cobra skips once `RunE` has returned an error: that is what makes
+  "never on a failure" structural. Nothing about the escalation state may affect anything but
+  which string is printed. That gating leaves the suite blind to it by default, so
+  `internal/cli/voice_test.go` forces `Env.Tty` on deliberately and pins `Env.Rand`; a voice
+  change proved only by a passing suite is not proved at all. Lines must be **original** -
+  this is a public repo, so no verbatim
+  Blizzard dialogue - and `voice.TestLinesMeetTheHouseStyle` holds the rest of the bar.
 
 ## Sharp edges
 

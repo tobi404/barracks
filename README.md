@@ -446,6 +446,33 @@ marks the ones this repository is already set up for.
 
 ---
 
+## Voice
+
+A command that changes something - `train`, `equip`, `spawn`, `recall`, `upgrade`,
+`garrison`, `run` - signs off with one short line from the unit that just took the order.
+Ask for the same thing on the same loadout again and again and it gets progressively more
+put-upon; leave it alone for a while and it greets you fresh.
+
+```
+$ barracks spawn frontend
+spawned frontend into /home/you/app/.claude/skills (Claude Code, until recalled)
+  + react
+  + css
+  ▸ Off to the front.
+```
+
+It is decoration, so it keeps out of the way of everything that matters:
+
+- **Only on a terminal.** Piped, redirected, or running in CI there is no line at all, and
+  no flag is needed to get that.
+- **Only on stderr**, so `barracks list | grep react` is never polluted even interactively.
+- **Never on a failure**, and never from a command that only reports - `list`, `deployed`,
+  `inspect` and `targets` say nothing.
+
+Turn it off for one command with `--quiet` (`-q`), or for good with `BARRACKS_QUIET=1`.
+
+---
+
 ## Personal or shared
 
 There are two ways to put a loadout in a repository, and they are for different jobs.
