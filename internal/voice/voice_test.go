@@ -1,6 +1,7 @@
 package voice
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,6 +169,57 @@ func TestBrokenStateCostsOnlyTheEscalation(t *testing.T) {
 		if got, want := s.Line("spawn", "frontend", "repo"), pools["spawn"][0][0]; got != want {
 			t.Errorf("%s: %q, want a fresh %q", name, got, want)
 		}
+	}
+}
+
+// TestOutOfRangeStateCostsOnlyTheEscalation is the same promise as the test
+// above for a file that parses: a recorded step outside the escalation is a step
+// nothing here wrote, so it degrades to a fresh line instead of indexing off the
+// end of a pool. Reached two ways - a negative step written straight into the
+// file, and one large enough that the increment wraps negative on its own.
+func TestOutOfRangeStateCostsOnlyTheEscalation(t *testing.T) {
+	now := time.Now()
+	fresh := pools["spawn"][0][0]
+	cases := map[string]int{
+		"negative step":     -5,
+		"overflowing step":  math.MaxInt64,
+		"step past the end": steps + 3,
+	}
+	for name, recorded := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := StatePath(t.TempDir())
+			save(path, state{Records: []record{{
+				Key:  key("spawn", "frontend", "repo"),
+				Step: recorded,
+				Seen: now,
+			}}})
+
+			s := &Speaker{Path: path, Now: func() time.Time { return now }, Rand: func() uint64 { return 0 }}
+			if got := s.Line("spawn", "frontend", "repo"); got != fresh {
+				t.Errorf("%q, want a fresh %q", got, fresh)
+			}
+			// ...and the escalation carries on from there rather than staying stuck.
+			if got, want := s.Line("spawn", "frontend", "repo"), pools["spawn"][1][0]; got != want {
+				t.Errorf("the repeat after it said %q, want the next step %q", got, want)
+			}
+		})
+	}
+}
+
+// TestStepInHoldsWhateverReachesIt pins the guard at the point of use directly,
+// since bump is now careful enough never to hand it a bad step itself.
+func TestStepInHoldsWhateverReachesIt(t *testing.T) {
+	pool := []step{{"first"}, {"second"}}
+	for _, bad := range []int{-1, -9999, 2, math.MaxInt64, math.MinInt64} {
+		if got := stepIn(pool, bad); len(got) != 1 || got[0] != "first" {
+			t.Errorf("step %d gave %q, want the fresh step", bad, got)
+		}
+	}
+	if got := stepIn(pool, 1); len(got) != 1 || got[0] != "second" {
+		t.Errorf("step 1 gave %q, want the second step", got)
+	}
+	if got := stepIn(nil, 0); got != nil {
+		t.Errorf("an empty pool gave %q, want nothing to say", got)
 	}
 }
 

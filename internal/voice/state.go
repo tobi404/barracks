@@ -51,10 +51,7 @@ func bump(path, key string, now time.Time) int {
 			continue // gone quiet; forget it entirely
 		}
 		if r.Key == key {
-			step = r.Step + 1
-			if step >= steps {
-				step = steps - 1
-			}
+			step = next(r.Step)
 			continue // rewritten below with the new step and time
 		}
 		kept = append(kept, r)
@@ -63,6 +60,23 @@ func bump(path, key string, now time.Time) int {
 
 	save(path, state{Records: kept})
 	return step
+}
+
+// next is the step a repeat earns from the one already recorded.
+//
+// A step the escalation does not have is a step nothing here wrote: the file is
+// on disk and can be hand-edited or truncated, and a large enough recorded step
+// makes the increment wrap negative. Such a record is worth no more than a
+// corrupt one, so it starts over rather than being reasoned from. A step the
+// escalation does have holds at the last one, which is where the weariness ends.
+func next(step int) int {
+	if step < 0 || step >= steps {
+		return 0
+	}
+	if step+1 >= steps {
+		return steps - 1
+	}
+	return step + 1
 }
 
 func load(path string) state {

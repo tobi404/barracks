@@ -43,11 +43,28 @@ func (s *Speaker) Line(command, subject, place string) string {
 	if !ok {
 		return ""
 	}
-	lines := pool[bump(s.Path, key(command, subject, place), s.now())]
+	lines := stepIn(pool, bump(s.Path, key(command, subject, place), s.now()))
 	if len(lines) == 0 {
 		return ""
 	}
 	return lines[int(s.pick()%uint64(len(lines)))]
+}
+
+// stepIn is the pool lookup, and it is where the escalation stops being trusted.
+//
+// The step comes from a file on disk that anything can edit or truncate, so a
+// step the pool does not have is spoken fresh rather than indexed. Guarding here
+// rather than only where the step is computed is what makes it hold whatever
+// reaches it: a panic in this package would be a flavor line costing a command
+// that had already done its work and printed its report.
+func stepIn(pool []step, step int) []string {
+	if len(pool) == 0 {
+		return nil
+	}
+	if step < 0 || step >= len(pool) {
+		return pool[0]
+	}
+	return pool[step]
 }
 
 // key is what the escalation counts repeats of.
