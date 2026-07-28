@@ -51,10 +51,12 @@ is written, read by both `make release-check`/`make release-snapshot` and the wo
   not promise archive-level reproducibility; the published `checksums.txt` is what a
   downloader verifies against.
 - **The token guard is the first step in the release job on purpose.** GoReleaser creates
-  the GitHub release before it pushes the Homebrew cask, so a missing
+  the GitHub release before it pushes the Homebrew cask, so a broken
   `HOMEBREW_TAP_GITHUB_TOKEN` discovered later would leave a published release that no
-  `brew install` can find. Anything else that can be checked before publishing belongs
-  above the GoReleaser step too.
+  `brew install` can find. It must stay a *working*-token check, not a non-empty check: a
+  fine-grained PAT always carries an expiry, so it asks GitHub about the tap with the
+  token and requires the reported push permission. Anything else that can be checked
+  before publishing belongs above the GoReleaser step too.
 - **Version, commit, and date reach the binaries through `internal/buildinfo`, not
   `main`.** Two `main` packages ship from this module; stamping an internal package means
   one set of `-X` flags covers both. When the linker leaves them empty, `buildinfo`
@@ -65,7 +67,10 @@ is written, read by both `make release-check`/`make release-snapshot` and the wo
 - **Homebrew is a cask (`homebrew_casks`), not a formula.** GoReleaser deprecated `brews`
   and `goreleaser check` fails on it. Casks are macOS-only, which is why the README sends
   Linux users to `go install` or the tarball, and why the cask carries a `postflight`
-  clearing `com.apple.quarantine` from both unsigned binaries.
+  clearing `com.apple.quarantine` from both unsigned binaries. `skip_upload` must stay the
+  quoted literal `"auto"` - GoReleaser skips the cask push for a prerelease tag on that
+  exact string and nothing else, so `true`, an unquoted `auto`, or an empty field all end
+  up handing a release candidate to every `brew install`.
 
 ## Invariants that must not be broken
 

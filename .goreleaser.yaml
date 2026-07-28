@@ -57,6 +57,7 @@ archives:
     formats: [tar.gz]
     files:
       - README.md
+      - LICENSE # a downloaded archive has to carry the grant of rights with it
 
 checksum:
   name_template: checksums.txt
@@ -105,7 +106,17 @@ homebrew_casks:
       # when this secret is missing, rather than publishing a release whose
       # formula never lands.
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # The literal string "auto", quoted so YAML cannot turn it into a boolean:
+    # GoReleaser skips the cask push only when the value is exactly that
+    # (internal/pipe/cask/cask.go). A prerelease tag still builds and publishes
+    # its GitHub release with binaries and checksums, but leaves the tap alone,
+    # so `brew install tobi404/tap/barracks` always serves the latest stable
+    # version.
+    skip_upload: "auto"
     homepage: https://github.com/tobi404/barracks
+    # Currently a no-op - GoReleaser records that casks do not support it yet
+    # (pkg/config/config.go) - but the metadata should not contradict LICENSE.
+    license: MIT
     # Homebrew's own style check rejects a desc of 80 characters or more.
     description: Spawn agent skill loadouts into any repo, or just for one session
     # brk is the alias people actually type. A cask that linked only barracks

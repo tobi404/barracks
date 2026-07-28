@@ -33,16 +33,31 @@ jobs:
       # GITHUB_TOKEN has no access to. Without this check GoReleaser would
       # create the GitHub release, then fail at the cask step, leaving a release
       # nobody can `brew install`. Failing here leaves nothing behind.
-      - name: require the Homebrew tap token
+      #
+      # Presence is not enough: a fine-grained PAT always carries an expiry, and
+      # an expired, revoked, or too-narrowly-scoped token is still a non-empty
+      # string. Asking GitHub about the tap with the token proves it is live and
+      # still reaches that repository, and the reported push permission catches
+      # a read-only grant.
+      - name: require a Homebrew tap token that can publish
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          TAP: tobi404/homebrew-tap
         run: |
-          if [ -n "$HOMEBREW_TAP_GITHUB_TOKEN" ]; then
-            echo "HOMEBREW_TAP_GITHUB_TOKEN is set."
-            exit 0
+          fix="Create a fine-grained personal access token (resource owner tobi404, repository access only $TAP, repository permission Contents: Read and write), store it as the repository secret HOMEBREW_TAP_GITHUB_TOKEN, and re-run this workflow. The Releasing section of README.md walks through it."
+          if [ -z "$HOMEBREW_TAP_GITHUB_TOKEN" ]; then
+            echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN is not set, so the Homebrew cask cannot be published to $TAP. No release was created. $fix"
+            exit 1
           fi
-          echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN is not set, so the Homebrew cask cannot be published to tobi404/homebrew-tap. No release was created. Add a fine-grained personal access token with Contents: read and write on tobi404/homebrew-tap (see the Releasing section of README.md), store it as the repository secret HOMEBREW_TAP_GITHUB_TOKEN, and re-run this workflow."
-          exit 1
+          if ! answer=$(GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" gh api "repos/$TAP" --jq .permissions.push 2>&1); then
+            echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN is set but cannot reach $TAP - it is expired, revoked, or scoped to another repository - so the Homebrew cask cannot be published. No release was created. GitHub said: $(printf '%s' "$answer" | tr '\n' ' '). $fix"
+            exit 1
+          fi
+          if [ "$answer" != "true" ]; then
+            echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN reaches $TAP but cannot write to it, so the Homebrew cask cannot be published. No release was created. $fix"
+            exit 1
+          fi
+          echo "HOMEBREW_TAP_GITHUB_TOKEN can write to $TAP."
 
       # Full history and tags: GoReleaser derives the version from the tag and
       # the changelog from the commits since the previous one.

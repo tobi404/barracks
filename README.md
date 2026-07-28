@@ -32,6 +32,7 @@ barracks run frontend -- claude                            # or just for one ses
 | Add support for another agent | [Adding a target](#adding-a-target) |
 | Work on barracks itself | [Development](#development) |
 | Cut a release | [Releasing](#releasing) |
+| Know the terms of use | [License](#license) |
 
 ---
 
@@ -410,6 +411,10 @@ v1.0.0        a release
 v1.2.0-rc.1   a prerelease - any suffix marks the GitHub release as a prerelease
 ```
 
+A prerelease still publishes its GitHub release with archives and checksums, but the
+Homebrew cask is not pushed, so `brew install tobi404/tap/barracks` keeps serving the
+latest stable version.
+
 The workflow triggers on `v*` and nothing else. The tag is the version: `barracks
 --version` reports it, and the Homebrew cask points at that tag's archives.
 
@@ -442,9 +447,11 @@ cask needs a token of its own:
 - Add it to this repository as a secret named exactly `HOMEBREW_TAP_GITHUB_TOKEN`
   (Settings → Secrets and variables → Actions → New repository secret).
 
-The release workflow checks for it before it builds anything and fails immediately if it
-is missing, naming the secret. A tag pushed without it produces no release at all, rather
-than a release nobody can `brew install`.
+The release workflow checks it before it builds anything and fails immediately if the
+secret is missing, or if the token no longer reaches the tap with write access - an
+expired or revoked token is caught here, not halfway through publishing. A tag pushed
+without a working token produces no release at all, rather than a release nobody can
+`brew install`. The token expires, so re-issuing it is part of releasing.
 
 ### Verifying without releasing
 
@@ -462,3 +469,9 @@ produce, minus the upload.
 ## Not built yet
 
 The committed/shared tier with a lockfile and `barracks upgrade` are separately queued.
+
+---
+
+## License
+
+MIT - see [`LICENSE`](./LICENSE). Every release archive carries a copy.
