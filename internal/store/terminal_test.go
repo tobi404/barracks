@@ -64,7 +64,7 @@ func watched(t *testing.T, config string) *display {
 // The wrapper is deliberately slow enough that every case announces a step.
 func fakeGit(t *testing.T, calls string) string {
 	t.Helper()
-	real, err := exec.LookPath("git")
+	realGit, err := exec.LookPath("git")
 	if err != nil {
 		t.Skipf("git is required for this test: %v", err)
 	}
@@ -79,7 +79,7 @@ if [ "$1" = "ls-remote" ]; then
 	exit 0
 fi
 exec %q "$@"
-`, calls, fakeCommit, real)
+`, calls, fakeCommit, realGit)
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
