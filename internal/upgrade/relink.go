@@ -168,24 +168,23 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, equipment []load
 	}
 
 	// Skills that appeared upstream, for sources this spawn was made from.
-	for i := range moves {
-		mv := &moves[i]
-		if !carries(sp.sources, mv) {
+	// provided already answers which carried source supplies each skill, so that
+	// rule has exactly one owner and the handoff above and the additions here
+	// can never attribute the same skill to different sources. By name, so the
+	// order is the same on every run and on every platform.
+	for _, name := range sortedKeys(provided) {
+		if recorded[name] {
 			continue
 		}
-		for _, name := range sortedNames(mv.skills) {
-			if recorded[name] {
-				continue
-			}
-			path := filepath.Join(l.Dir, name)
-			if occupied, reason := pathOccupied(path); occupied {
-				sp.Kept = append(sp.Kept, lease.Kept{Path: path, Reason: reason})
-				continue
-			}
-			sp.Ops = append(sp.Ops, Op{Kind: OpAdd, Skill: name, Path: path, To: mv.skills[name]})
-			final = append(final, lease.Link{Path: path, Target: mv.skills[name], Skill: name, Source: mv.ident})
-			recorded[name] = true
+		mv := provided[name]
+		path := filepath.Join(l.Dir, name)
+		if occupied, reason := pathOccupied(path); occupied {
+			sp.Kept = append(sp.Kept, lease.Kept{Path: path, Reason: reason})
+			continue
 		}
+		sp.Ops = append(sp.Ops, Op{Kind: OpAdd, Skill: name, Path: path, To: mv.skills[name]})
+		final = append(final, lease.Link{Path: path, Target: mv.skills[name], Skill: name, Source: mv.ident})
+		recorded[name] = true
 	}
 
 	sort.Slice(final, func(i, j int) bool { return final[i].Skill < final[j].Skill })
@@ -309,8 +308,9 @@ func hasSkill(skills map[string]string, name string) bool {
 }
 
 // carriedSources is the set of sources this spawn was materialised from, which
-// is what makes an upstream addition belong here. A loadout equipped with a new
-// source after a spawn is not silently materialised by an upgrade.
+// is what makes an upstream addition belong here. A source at a repository or
+// subpath this spawn was never made from is not silently materialised into it
+// by an upgrade. See carries for the granularity that match has.
 //
 // A lease records its provenance, so the answer survives a source that
 // momentarily exports no skills: every link from it is removed, and the record
@@ -365,6 +365,15 @@ func refreshIdents(recorded []lease.SourceRef, equipment []loadout.Equipment) []
 }
 
 // carries reports whether the spawn's provenance includes this source.
+//
+// The match is on repository and subpath and deliberately not on the ref, so
+// one repository and subpath equipped twice at two refs is one source here and
+// either entry's skills may be added to a spawn made from the other. That is
+// the granularity README.md documents, and it is a consequence of `--pin`:
+// pinning rewrites a source's declared ref, and a ref-sensitive comparison
+// would stop recognising a spawn's own source the moment it was pinned and
+// wrongly skip every later addition. Repository and subpath are the parts
+// `--pin` cannot rewrite. Narrow the document, not this comparison.
 func carries(sources []lease.SourceRef, mv *move) bool {
 	key := mv.src.RepoKey()
 	for _, s := range sources {

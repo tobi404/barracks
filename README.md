@@ -200,9 +200,26 @@ longer exists upstream has its symlink removed rather than left dangling, and
 new skills are registered in `.git/info/exclude`, so `git status` stays clean
 before and after.
 
-Upgrading moves a spawn forward along the sources it was made from. A source
-equipped *after* a repo was spawned into is not materialised there by an
-upgrade - run `barracks spawn` again to pick it up.
+Upgrading moves a spawn forward along the sources it was made from. Membership
+is recorded per **repository and subpath**, never per ref, so re-equipping the
+same repository and subpath at another ref counts as the *same* source and its
+skills do land in a spawn that already exists:
+
+```bash
+barracks equip frontend gh:owner/skills#main:skills
+barracks spawn frontend
+barracks equip frontend gh:owner/skills#v1:skills
+barracks upgrade frontend       # the #v1 entry's skills land in that spawn
+```
+
+A source at a different repository, or at a different subpath of the same
+repository, equipped *after* a repo was spawned into is not materialised there
+by an upgrade - run `barracks spawn` again to pick that one up.
+
+The ref is left out of the match on purpose: `--pin` rewrites a source's
+declared ref, and a ref-sensitive comparison would stop recognising a spawn's
+own source the moment you pinned it, silently skipping every later addition.
+The repository and subpath are the parts `--pin` cannot rewrite.
 
 | Flag | Effect |
 |---|---|

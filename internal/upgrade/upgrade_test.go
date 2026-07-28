@@ -661,9 +661,12 @@ func TestUpgradeReattachesASourceThatExportedNothing(t *testing.T) {
 	}
 }
 
-// TestUpgradeDoesNotAddFromASourceEquippedAfterTheSpawn: provenance gates
-// additions. A source the spawn was never made from is not silently
-// materialised into it.
+// TestUpgradeDoesNotAddFromASourceEquippedAfterTheSpawn is one half of the
+// documented boundary: provenance gates additions, so a source at a repository
+// the spawn was never made from is not silently materialised into it. Its
+// companion below pins the other half - what the same repository and subpath at
+// a different ref does - and the two together are exactly the guarantee
+// README.md states.
 func TestUpgradeDoesNotAddFromASourceEquippedAfterTheSpawn(t *testing.T) {
 	f := newFixture(t)
 	alpha := f.source("alpha", testutil.Skill{Path: "skills/alpha"})
@@ -685,6 +688,62 @@ func TestUpgradeDoesNotAddFromASourceEquippedAfterTheSpawn(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(f.skillsDir(), "beta")); !os.IsNotExist(err) {
 		t.Error("a source equipped after the spawn was materialised into it")
+	}
+}
+
+// TestUpgradeAddsFromTheSameRepoAndSubpathEquippedAtAnotherRef is the other half
+// of that boundary, and is not a contradiction of it: spawn membership is
+// recorded per repository and subpath, never per ref, so equipping the same
+// repository and subpath at a second ref after the spawn counts as the source
+// the spawn already carries and its skills do land there.
+//
+// The ref is left out of the match because `--pin` rewrites it; a ref-sensitive
+// comparison would stop recognising a spawn's own source the moment it was
+// pinned. README.md documents this case with the same three commands.
+func TestUpgradeAddsFromTheSameRepoAndSubpathEquippedAtAnotherRef(t *testing.T) {
+	f := newFixture(t)
+	repo := f.source("skills", testutil.Skill{Path: "skills/react"}, testutil.Skill{Path: "skills/legacy"})
+	repo.CheckoutNew(t, "v1")
+	v1 := repo.Head(t)
+	repo.Checkout(t, "main")
+	repo.AddSkills(t, testutil.Skill{Path: "skills/react", Body: "main moved past v1\n"})
+	repo.Commit(t, "move main past v1")
+
+	l := f.train("frontend")
+	f.equip(l, repo.Dir+"#main:skills", "react")
+	f.spawn(l, lease.KindManual)
+
+	legacy := filepath.Join(f.skillsDir(), "legacy")
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Fatal("the spawn already carried legacy; the test proves nothing")
+	}
+
+	l, err := f.eng.Loadouts.Get("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.equip(l, repo.Dir+"#v1:skills", "legacy")
+
+	p := f.upgrade("frontend", Options{})
+	if p.Failed() {
+		t.Fatalf("upgrade failed: %v", p.Errs)
+	}
+	sp := f.spawnPlan(p)
+	ops := opsFor(sp, "legacy")
+	if len(ops) != 1 || ops[0].Kind != OpAdd {
+		t.Fatalf("legacy ops = %+v, want one add", ops)
+	}
+	if _, err := os.Lstat(legacy); err != nil {
+		t.Fatalf("the second ref of the same repository and subpath was not materialised: %v", err)
+	}
+	if got := dest(t, legacy); !strings.Contains(got, v1) {
+		t.Errorf("legacy points at %s, want the entry for the v1 commit %s", got, v1)
+	}
+	if got := body(t, legacy); got == "" {
+		t.Error("legacy does not resolve to the store entry")
+	}
+	if got := f.work.Status(t); got != "" {
+		t.Errorf("the addition dirtied git status:\n%s", got)
 	}
 }
 
