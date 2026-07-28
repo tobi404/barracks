@@ -54,6 +54,9 @@ versions with no barracks installed.
 		SilenceErrors: true,
 		Version:       Version,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			// Recorded before init, because the progress reporter it builds is
+			// gated on it too.
+			env.quiet = quiet
 			return env.init()
 		},
 		// Cobra skips every PostRun once RunE has returned an error, which is
@@ -61,9 +64,6 @@ versions with no barracks installed.
 		// a command that succeeded, and it lands after the real report because
 		// this runs after RunE has finished writing it.
 		PersistentPostRun: func(cmd *cobra.Command, args []string) {
-			if quiet {
-				return
-			}
 			env.speak(cmd.Name(), subjectOf(args))
 		},
 	}
@@ -71,7 +71,7 @@ versions with no barracks installed.
 	root.SetErr(env.Err)
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false,
-		"suppress the flavor line printed after a successful command (see also "+EnvQuiet+")")
+		"suppress the progress indicator and the flavor line (see also "+EnvQuiet+")")
 
 	root.AddCommand(
 		newTrainCmd(env),

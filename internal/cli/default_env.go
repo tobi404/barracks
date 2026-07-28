@@ -31,18 +31,21 @@ func DefaultEnv() (*Env, error) {
 		Git:    gitcmd.Git{},
 		Getenv: os.Getenv,
 		Home:   os.UserHomeDir,
-		Tty:    stdoutIsTerminal,
+		Tty:    func() bool { return isTerminal(os.Stdout) },
+		ErrTty: func() bool { return isTerminal(os.Stderr) },
 	}, nil
 }
 
-// stdoutIsTerminal reports whether stdout is attached to a terminal rather than
-// a pipe, a file, or whatever CI hands a process.
+// isTerminal reports whether f is attached to a terminal rather than a pipe, a
+// file, or whatever CI hands a process.
 //
 // A character device is the test because it needs no dependency and no syscall
 // this program does not already make: a pipe and a regular file are both
-// something else, which is the only distinction the flavor line cares about.
-func stdoutIsTerminal() bool {
-	fi, err := os.Stdout.Stat()
+// something else, which is the only distinction either the flavor line or the
+// progress indicator cares about. Both ask this question, of their own stream -
+// see Env.ErrTty.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
 	if err != nil {
 		return false
 	}

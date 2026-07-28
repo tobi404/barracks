@@ -301,3 +301,32 @@ func TestContains(t *testing.T) {
 		})
 	}
 }
+
+// TestOnlyASSHSourceIsTreatedAsSharingTheTerminal guards the one decision that
+// keeps a git credential prompt readable. gitcmd captures git's own streams and
+// disables its terminal prompt, so ssh opening /dev/tty for a passphrase or a
+// host-key confirmation is the only way a fetch can reach the user's terminal -
+// and a step that can do that is never animated. Getting this wrong in either
+// direction is a real cost: too eager and the spinner is off for everyone, too
+// lax and it repaints over the prompt.
+func TestOnlyASSHSourceIsTreatedAsSharingTheTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		cloneURL string
+		want     bool
+	}{
+		{"https://github.com/owner/repo.git", false},
+		{"http://example.com/owner/repo.git", false},
+		{"git://example.com/owner/repo.git", false},
+		{"/home/you/fixtures/skills", false},
+		{"./fixtures/skills", false},
+		{"ssh://git@github.com/owner/repo.git", true},
+		{"SSH://git@github.com/owner/repo.git", true},
+		{"git+ssh://git@example.com/owner/repo.git", true},
+		{"git@github.com:owner/repo.git", true},
+		{"example.com:owner/repo.git", true},
+	} {
+		if got := overSSH(tc.cloneURL); got != tc.want {
+			t.Errorf("overSSH(%q) = %v, want %v", tc.cloneURL, got, tc.want)
+		}
+	}
+}
