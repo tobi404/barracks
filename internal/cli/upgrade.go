@@ -41,6 +41,13 @@ keeps the skills it started with, because changing them underneath a session
 that has already read them is exactly the kind of surprise barracks exists not
 to produce. Pass --include-running to relink those too.
 
+A loadout garrisoned into this repository is upgraded too: the vendored files
+and barracks.lock are rewritten together onto the new pins, so the skill update
+arrives as one reviewable diff to commit rather than happening invisibly on each
+machine. That is reported separately, because it is the one part of an upgrade
+somebody else will read. A vendored file you have edited stops it, and barracks
+says to run "barracks garrison <loadout> --force" if you meant to replace it.
+
   barracks upgrade
   barracks upgrade frontend --dry-run
   barracks upgrade frontend --pin`),
@@ -67,15 +74,25 @@ to produce. Pass --include-running to relink those too.
 			opts := upgrade.Options{Pin: pin, IncludeRunning: includeRunning}
 
 			plans := eng.Plan(cmd.Context(), targets, opts)
+			// The committed tier is planned before anything is applied, so a
+			// --dry-run describes it from the same reads the real run acts on,
+			// and applied afterwards, so it installs the pins the loadout
+			// definition now records rather than the ones it had a moment ago.
+			stages := env.planGarrisonUpgrades(cmd.Context(), plans)
 			if !dryRun {
 				eng.Apply(plans)
+				env.applyGarrisonUpgrades(cmd.Context(), stages)
 			}
 			renderUpgrade(env, plans, dryRun)
+			committedOK := renderGarrisonUpgrades(env, stages, dryRun)
 
 			for _, p := range plans {
 				if p.Failed() {
 					return fmt.Errorf("some sources could not be upgraded")
 				}
+			}
+			if !committedOK {
+				return fmt.Errorf("the committed files could not be brought onto the new pins")
 			}
 			return nil
 		},

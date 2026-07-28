@@ -196,6 +196,17 @@ deliberate decision, not a refactor.
   inside the repository, so `undo` restores overwritten content byte for byte, and the
   lockfile is written last. Files on disk that no lockfile describes is the one state this
   tier must never be left in.
+- **`upgrade` reaches both tiers, and the committed half runs last.**
+  `cli.Env.planGarrisonUpgrades` reads before anything is applied, so `--dry-run` describes
+  the committed tier from the same reads the real run acts on;
+  `cli.Env.applyGarrisonUpgrades` calls `garrison.Engine.Reinstall` *after* `upgrade.Apply`
+  has saved the loadout definitions, so files, lockfile, and definition all name the same
+  commits. Keep that order. It compares the lockfile against the loadout's pins rather than
+  against whether a source moved in this run - the same reason `upgrade` plans a move for
+  every source - so a garrison an earlier run left behind is recoverable rather than
+  stranded, and a no-op upgrade still leaves the repository clean. `upgrade` deliberately has
+  no `--force`: a locally edited vendored file stops the committed half and barracks names
+  `barracks garrison <loadout> --force` instead of growing a second spelling of it.
 
 ## Sharp edges
 

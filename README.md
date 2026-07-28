@@ -330,6 +330,34 @@ Old store entries are left behind after an upgrade. Disk is cheap, and deleting
 a commit something might still be pointing at is not a decision to make
 implicitly.
 
+**A garrisoned loadout is upgraded too**, and reported separately, because it is
+the one part of an upgrade somebody else will read:
+
+```
+frontend
+  github.com/owner/skills#main  940f8b38 -> f6183d1c
+    + hooks
+    ~ react
+committed here (barracks.lock)
+  frontend
+    github.com/owner/skills#main  940f8b38 -> f6183d1c
+    + .claude/skills/hooks/SKILL.md
+    + .claude/skills/react/SKILL.md
+    commit these files and barracks.lock together
+```
+
+The vendored files and `barracks.lock` are rewritten together onto the new pins,
+so the skill update becomes a reviewable diff instead of something that happens
+invisibly on each machine. That is the whole reason the committed tier exists.
+The comparison is against the lockfile rather than against whether a source moved
+in this run, so a garrison an earlier upgrade left behind is recognised and
+brought forward - and an upgrade with nothing to do leaves the repository clean.
+
+A vendored file you have edited stops it, exactly as `barracks garrison` would,
+and barracks names the command that overrides it. The loadout definition still
+moves forward, so the lockfile is the only thing left behind; `barracks inspect`
+reports that as a note until you run `barracks garrison <loadout> --force`.
+
 ### `barracks recall <loadout>`
 
 Removes a spawned loadout, leaving the repo exactly as it was.
@@ -432,6 +460,7 @@ There are two ways to put a loadout in a repository, and they are for different 
 | Lifetime | A lease: `manual`, `--for`, or `barracks run` | Until someone recalls it, in a commit |
 | Reaped automatically | Yes, when the lease ends | **Never** - it has no lease |
 | Disk cost | One copy per machine | One copy per repository |
+| `barracks upgrade` | Relinks it in place | Rewrites the files and `barracks.lock` |
 | Updating | Happens on each machine | A reviewable diff in a pull request |
 
 **Spawn** when the skill set is your own preference: a set you like in every repo you touch,

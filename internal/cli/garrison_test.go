@@ -17,13 +17,6 @@ func (h *harness) garrisonPath(rel string) string {
 
 func (h *harness) lockPath() string { return filepath.Join(h.work.Dir, garrison.LockName) }
 
-// equipped trains and equips a loadout from the fixture source repository.
-func (h *harness) equipped(name string, args ...string) {
-	h.t.Helper()
-	h.mustRun("train", name)
-	h.mustRun(append([]string{"equip", name, h.sourceArg("skills")}, args...)...)
-}
-
 // TestGarrisonLifecycle is the committed tier end to end through the real
 // command tree: commit, verify, update, and remove.
 func TestGarrisonLifecycle(t *testing.T) {
@@ -246,5 +239,136 @@ func TestInspectWithNothingGarrisoned(t *testing.T) {
 	}
 	if _, _, err := h.run("garrison"); err == nil {
 		t.Error("garrison with nothing recorded and no loadout named succeeded")
+	}
+}
+
+// TestUpgradeBringsAGarrisonOntoTheNewPins is acceptance criterion 5: one command
+// rewrites the vendored files and the lockfile together, and never leaves the two
+// disagreeing.
+func TestUpgradeBringsAGarrisonOntoTheNewPins(t *testing.T) {
+	h := newHarness(t)
+	h.equipped("frontend", "--except", "legacy")
+	h.mustRun("garrison", "frontend")
+	h.work.Commit(t, "garrison frontend")
+	lockBefore := testutil.ReadFile(t, h.lockPath())
+
+	// react changes, css disappears, tailwind arrives.
+	testutil.WriteFile(t, filepath.Join(h.src.Dir, "skills", "react", "SKILL.md"), "---\nname: react\n---\n\nv2\n")
+	if err := os.RemoveAll(filepath.Join(h.src.Dir, "skills", "css")); err != nil {
+		t.Fatal(err)
+	}
+	h.src.AddSkills(t, testutil.Skill{Path: "skills/tailwind"})
+	h.src.Commit(t, "v2")
+
+	// A dry run describes the committed half and changes nothing.
+	out := h.mustRun("upgrade", "frontend", "--dry-run")
+	for _, want := range []string{"committed here", "frontend", "would rewrite the committed files"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry run does not describe the committed tier (%q missing):\n%s", want, out)
+		}
+	}
+	if got := testutil.ReadFile(t, h.lockPath()); got != lockBefore {
+		t.Error("a dry run rewrote the lockfile")
+	}
+	if status := h.work.Status(t); status != "" {
+		t.Errorf("a dry run changed the working tree:\n%s", status)
+	}
+
+	out = h.mustRun("upgrade", "frontend")
+	for _, want := range []string{
+		"committed here",
+		"+ .claude/skills/react/SKILL.md",
+		"+ .claude/skills/tailwind/SKILL.md",
+		"- .claude/skills/css/SKILL.md",
+		"commit these files and " + garrison.LockName,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("upgrade output missing %q:\n%s", want, out)
+		}
+	}
+
+	// Files, lockfile, and loadout definition all name the same commits.
+	h.mustRun("inspect")
+	if got := testutil.ReadFile(t, h.garrisonPath(".claude/skills/react/SKILL.md")); !strings.Contains(got, "v2") {
+		t.Errorf("the vendored file was not updated: %q", got)
+	}
+	if !testutil.Exists(h.garrisonPath(".claude/skills/tailwind/SKILL.md")) {
+		t.Error("a new upstream skill was not committed")
+	}
+	if testutil.Exists(h.garrisonPath(".claude/skills/css")) {
+		t.Error("a dropped skill was left behind")
+	}
+	if got := testutil.ReadFile(t, h.lockPath()); got == lockBefore {
+		t.Error("the lockfile was not rewritten alongside the files")
+	}
+
+	// The whole change is one reviewable diff, and nothing is hidden from git.
+	status := h.work.Status(t)
+	for _, want := range []string{garrison.LockName, ".claude/skills/react/SKILL.md", ".claude/skills/css/SKILL.md"} {
+		if !strings.Contains(status, want) {
+			t.Errorf("git status does not show %s as part of the diff:\n%s", want, status)
+		}
+	}
+	if got := h.work.ReadExclude(t); strings.Contains(got, "tailwind") {
+		t.Errorf("upgrade excluded a committed path from git:\n%s", got)
+	}
+
+	// Nothing left to do: the second upgrade leaves the repository alone.
+	h.work.Commit(t, "upgrade frontend")
+	out = h.mustRun("upgrade", "frontend")
+	if strings.Contains(out, "committed here") {
+		t.Errorf("an upgrade with nothing to do still reported the committed tier:\n%s", out)
+	}
+	if status := h.work.Status(t); status != "" {
+		t.Errorf("an upgrade with nothing to do dirtied the repository:\n%s", status)
+	}
+}
+
+// TestUpgradeRefusesToOverwriteAnEditedVendoredFile: an upgrade is not a licence
+// to discard somebody's edit, and it says which command is.
+func TestUpgradeRefusesToOverwriteAnEditedVendoredFile(t *testing.T) {
+	h := newHarness(t)
+	h.equipped("frontend", "--only", "react")
+	h.mustRun("garrison", "frontend")
+	h.work.Commit(t, "garrison frontend")
+
+	edited := h.garrisonPath(".claude/skills/react/SKILL.md")
+	testutil.WriteFile(t, edited, "my own words\n")
+	testutil.WriteFile(t, filepath.Join(h.src.Dir, "skills", "react", "SKILL.md"), "---\nname: react\n---\n\nv2\n")
+	h.src.Commit(t, "v2")
+
+	_, errOut, err := h.run("upgrade", "frontend")
+	if err == nil {
+		t.Fatal("upgrade succeeded over a locally edited vendored file")
+	}
+	if testutil.ReadFile(t, edited) != "my own words\n" {
+		t.Error("upgrade discarded the edit")
+	}
+	if !strings.Contains(errOut, "barracks garrison frontend --force") {
+		t.Errorf("upgrade did not say how to proceed:\n%s", errOut)
+	}
+
+	// The loadout still moved forward, so the fix is one command away and the
+	// lockfile is the only thing still behind - which inspect reports as a note.
+	h.mustRun("garrison", "frontend", "--force")
+	h.mustRun("inspect")
+}
+
+// TestUpgradeLeavesARepositoryWithNoGarrisonAlone keeps the personal path
+// unchanged: a repository that never garrisoned anything sees no new output.
+func TestUpgradeLeavesARepositoryWithNoGarrisonAlone(t *testing.T) {
+	h := newHarness(t)
+	h.equipped("frontend", "--only", "react")
+	h.mustRun("spawn", "frontend")
+
+	testutil.WriteFile(t, filepath.Join(h.src.Dir, "skills", "react", "SKILL.md"), "---\nname: react\n---\n\nv2\n")
+	h.src.Commit(t, "v2")
+
+	out := h.mustRun("upgrade", "frontend")
+	if strings.Contains(out, "committed here") {
+		t.Errorf("upgrade reported a committed tier in a repository with none:\n%s", out)
+	}
+	if testutil.Exists(h.lockPath()) {
+		t.Error("upgrade created a lockfile where nothing was garrisoned")
 	}
 }
