@@ -216,6 +216,61 @@ func TestLinesMeetTheHouseStyle(t *testing.T) {
 			}
 		}
 	}
+
+	// The one house rule the exact-uniqueness check above cannot see: a line
+	// must never restate the one before it. A restatement is rarely a
+	// duplicate - bolt an ellipsis onto the previous step and the strings
+	// differ while the unit says the same sentence twice - so consecutive
+	// steps are compared word by word instead.
+	//
+	// Four consecutive words, and the threshold is deliberate. Over these pools
+	// four flags a genuine restatement and nothing else. Three also flags "To
+	// the depot." against "Back to the depot.", where "back" is the
+	// progression - first the trip out, then the return - which is the opposite
+	// of a restatement. There are no exceptions and no allow-list: a failure
+	// here means the line should change, never that the number should.
+	for command, pool := range pools {
+		for i := 0; i+1 < len(pool); i++ {
+			for _, earlier := range pool[i] {
+				for _, later := range pool[i+1] {
+					a, b := normalizedWords(earlier), normalizedWords(later)
+					where := command + " steps " + string(rune('0'+i)) + " and " + string(rune('0'+i+1))
+					if run := sharedRun(a, b, 4); run != "" {
+						t.Errorf("%s: %q restates %q - both carry %q", where, later, earlier, run)
+					}
+					if strings.Join(a, " ") == strings.Join(b, " ") {
+						t.Errorf("%s: %q is %q again", where, later, earlier)
+					}
+				}
+			}
+		}
+	}
+}
+
+// normalizedWords lowercases a line, drops the leading ellipsis every step-2
+// slot opens with, and strips the punctuation from each word's edges.
+func normalizedWords(line string) []string {
+	var words []string
+	for _, w := range strings.Fields(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(line)), "...")) {
+		if w = strings.Trim(w, ".!?,'\""); w != "" {
+			words = append(words, w)
+		}
+	}
+	return words
+}
+
+// sharedRun returns the first run of n consecutive words a and b have in
+// common, or "" when they share none that long.
+func sharedRun(a, b []string, n int) string {
+	for i := 0; i+n <= len(a); i++ {
+		run := strings.Join(a[i:i+n], " ")
+		for j := 0; j+n <= len(b); j++ {
+			if run == strings.Join(b[j:j+n], " ") {
+				return run
+			}
+		}
+	}
+	return ""
 }
 
 func bannedWord(word string, banned []string) string {

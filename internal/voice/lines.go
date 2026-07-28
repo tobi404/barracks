@@ -56,7 +56,7 @@ var pools = map[string][]step{
 	"upgrade": {
 		{"To the depot.", "Off to the quartermaster.", "The runner sets out."},
 		{"The runner returns.", "Back to the depot.", "Sent to the depot again."},
-		{"...to the depot again.", "This errand wears thin.", "Another trip, another errand."},
+		{"...sent out once more.", "This errand wears thin.", "Another trip, another errand."},
 		{"Always the same errand!", "The depot and back, again.", "Enough of this road."},
 	},
 	"garrison": {
