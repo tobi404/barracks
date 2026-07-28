@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/tobi404/barracks/internal/target"
 )
 
 func newListCmd(env *Env) *cobra.Command {
@@ -15,7 +14,8 @@ func newListCmd(env *Env) *cobra.Command {
 		Use:   "list",
 		Short: "List every loadout in the barracks",
 		Long: strings.TrimSpace(`
-Lists every loadout you have trained, with its sources and skill count.
+Lists every loadout you have trained, with its sources, skill count, and the
+agents it installs into.
 
 Use --verbose to see each source's pinned commit and the skills it contributes.
 
@@ -42,6 +42,11 @@ Use --verbose to see each source's pinned commit and the skills it contributes.
 					fmt.Fprintf(env.Out, "  - %s", l.Description)
 				}
 				fmt.Fprintln(env.Out)
+				if len(l.Targets) > 0 {
+					fmt.Fprintf(env.Out, "    -> %s\n", strings.Join(l.Targets, ", "))
+				} else {
+					fmt.Fprintf(env.Out, "    -> detected per repository\n")
+				}
 				for _, eq := range l.Equipment {
 					fmt.Fprintf(env.Out, "    %s@%s\n", eq.Ident(), shortSHA(eq.Commit))
 					if verbose {
@@ -56,35 +61,4 @@ Use --verbose to see each source's pinned commit and the skills it contributes.
 	}
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "list each source's skills")
 	return cmd
-}
-
-func newTargetsCmd(env *Env) *cobra.Command {
-	return &cobra.Command{
-		Use:   "targets",
-		Short: "List the agents barracks can deploy to",
-		Long: strings.TrimSpace(`
-Lists every agent barracks knows how to deploy to, and where each one keeps its
-skills. Pass one of these IDs to spawn or run with --target.
-
-  barracks targets`),
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			env.reap()
-			for _, t := range target.Registry {
-				global, err := t.GlobalPath(env.Getenv, env.Home)
-				if err != nil {
-					global = "(unresolvable: " + err.Error() + ")"
-				}
-				marker := " "
-				if t.ID == target.DefaultID {
-					marker = "*"
-				}
-				fmt.Fprintf(env.Out, "%s %-10s %s\n", marker, t.ID, t.Display)
-				fmt.Fprintf(env.Out, "    in repo:  <repo>/%s\n", t.RepoDir)
-				fmt.Fprintf(env.Out, "    global:   %s\n", global)
-			}
-			fmt.Fprintf(env.Out, "\n* default target\n")
-			return nil
-		},
-	}
 }

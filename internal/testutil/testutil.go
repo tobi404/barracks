@@ -132,6 +132,27 @@ func WriteFile(t *testing.T, path, content string) {
 	}
 }
 
+// WriteScript writes an executable shell script and returns its path. Tests use
+// it to stand in for an agent's own CLI, so `barracks run -- <agent>` can be
+// exercised without that agent being installed.
+func WriteScript(t *testing.T, path, body string) string {
+	t.Helper()
+	WriteFile(t, path, "#!/bin/sh\n"+body+"\n")
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
+	return path
+}
+
+// MkDir creates a directory and its parents. Tests use it to plant the
+// configuration directories barracks detects targets by.
+func MkDir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+}
+
 // IsSymlink reports whether path is a symbolic link.
 func IsSymlink(t *testing.T, path string) bool {
 	t.Helper()

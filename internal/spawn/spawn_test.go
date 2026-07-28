@@ -635,3 +635,98 @@ func TestTwoLoadoutsInOneDirectoryCleanUpFully(t *testing.T) {
 		t.Error("the last recall left empty directories behind")
 	}
 }
+
+// TestSpawnAllReachesEveryTarget is the multi-target case: one command, one
+// lease per agent, each recording only its own paths.
+func TestSpawnAllReachesEveryTarget(t *testing.T) {
+	s := newScene(t)
+	l := s.loadout(t, "frontend", "skills", nil, nil)
+	targets, err := target.LookupAll([]string{"claude", "cursor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := s.engine.SpawnAll(ctx(), Request{Loadout: l, Cwd: s.work.Dir}, targets)
+	if err != nil {
+		t.Fatalf("SpawnAll: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("SpawnAll produced %d results, want one per target", len(results))
+	}
+	for i, res := range results {
+		if res.Lease.Target != targets[i].ID {
+			t.Errorf("result %d recorded target %q, want %q", i, res.Lease.Target, targets[i].ID)
+		}
+		for _, link := range res.Lease.Links {
+			if !strings.HasPrefix(link.Path, targets[i].RepoPath(res.Lease.Root)) {
+				t.Errorf("lease for %q recorded %q, which is not in its own directory", targets[i].ID, link.Path)
+			}
+			if !testutil.IsSymlink(t, link.Path) {
+				t.Errorf("%s was not created as a symlink", link.Path)
+			}
+		}
+	}
+}
+
+// TestSpawnAllIsAllOrNothing guards the atomicity of a two-agent spawn: a user
+// who ran one command should never have to work out which half of it happened.
+func TestSpawnAllIsAllOrNothing(t *testing.T) {
+	s := newScene(t)
+	l := s.loadout(t, "frontend", "skills", nil, nil)
+	targets, err := target.LookupAll([]string{"claude", "cursor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The second target's destination is already taken by something barracks
+	// did not create, so that half must fail.
+	taken := filepath.Join(targets[1].RepoPath(s.work.Dir), "react")
+	testutil.WriteFile(t, filepath.Join(taken, "SKILL.md"), "mine")
+	statusBefore := s.work.Status(t)
+
+	_, err = s.engine.SpawnAll(ctx(), Request{Loadout: l, Cwd: s.work.Dir}, targets)
+	if err == nil {
+		t.Fatal("SpawnAll should fail when one of its targets cannot be spawned")
+	}
+	// The rollback's own outcome travels with the error. Revocation keeps
+	// anything it does not recognise as its own, and a caller that could print
+	// the failure without those reports would hide it.
+	var rollback *RollbackError
+	if !errors.As(err, &rollback) {
+		t.Fatalf("SpawnAll returned %v, want an error carrying what the rollback could not undo", err)
+	}
+	if len(rollback.Reports) != 1 {
+		t.Fatalf("rollback carried %d reports, want one per target it had already created", len(rollback.Reports))
+	}
+	if rollback.Reports[0].Lease.Target != targets[0].ID {
+		t.Errorf("the rollback report names %q, want the target that was rolled back (%q)",
+			rollback.Reports[0].Lease.Target, targets[0].ID)
+	}
+	if !errors.Is(err, ErrOccupied) {
+		t.Errorf("the wrapped cause was lost: %v", err)
+	}
+
+	// The first target is rolled all the way back.
+	if testutil.Exists(targets[0].RepoPath(s.work.Dir)) {
+		t.Errorf("the first target's directory survived a failed multi-target spawn")
+	}
+	leases, _ := s.leases.List()
+	if len(leases) != 0 {
+		t.Errorf("a failed SpawnAll left %d lease records behind", len(leases))
+	}
+	// And the user's own directory is untouched.
+	if body, err := os.ReadFile(filepath.Join(taken, "SKILL.md")); err != nil || string(body) != "mine" {
+		t.Errorf("the occupied path was damaged: %q, %v", body, err)
+	}
+	if status := s.work.Status(t); status != statusBefore {
+		t.Errorf("a failed multi-target spawn changed git status:\n got: %s\nwant: %s", status, statusBefore)
+	}
+}
+
+func TestSpawnAllNeedsATarget(t *testing.T) {
+	s := newScene(t)
+	l := s.loadout(t, "frontend", "skills", nil, nil)
+	if _, err := s.engine.SpawnAll(ctx(), Request{Loadout: l, Cwd: s.work.Dir}, nil); err == nil {
+		t.Fatal("SpawnAll with no targets should fail rather than do nothing quietly")
+	}
+}

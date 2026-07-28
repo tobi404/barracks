@@ -16,8 +16,8 @@ import (
 
 func newRunCmd(env *Env) *cobra.Command {
 	var (
-		global   bool
-		targetID string
+		global    bool
+		targetIDs []string
 	)
 
 	cmd := &cobra.Command{
@@ -28,10 +28,17 @@ Spawns a loadout, runs a command with those skills available, and recalls the
 loadout the moment the command exits.
 
 This is the throwaway-session case: the skills exist for exactly as long as the
-process does, and nothing is left behind afterwards.
+process does, and nothing is left behind afterwards. The loadout reaches every
+agent it installs into, so one run can serve a command that reads more than one.
+
+When the command is an agent barracks knows, that agent is equipped even if the
+repository shows no sign of it - running claude here installs into Claude Code.
+A --target flag or a loadout's own declaration still decides on its own; if it
+leaves out the agent being launched, barracks says so rather than overruling it.
 
   barracks run frontend -- claude
   barracks run review -- claude -p "review this diff"
+  barracks run frontend --target cursor -- cursor-agent
 
 The lease is tied to the command's process identity, not just its PID, so a
 recycled PID can never keep a dead lease alive. Ctrl-C is forwarded to the
@@ -52,7 +59,14 @@ outright, the next barracks command reaps the lease.`),
 			if err != nil {
 				return err
 			}
-			tgt, err := target.Lookup(targetID)
+			// run is the one command that already knows which agent is about to
+			// read the skills, and equipping that agent's session is the whole
+			// point of it. So the launched program joins target selection - but
+			// only where selection would otherwise be barracks' own guess. An
+			// unrecognised program (a wrapper, `sh -c ...`) matches nothing and
+			// changes nothing.
+			launched := target.ForCommand(argv[0])
+			sel, err := env.selectTargetsFor(cmd.Context(), l, targetIDs, global, launched)
 			if err != nil {
 				return err
 			}
@@ -73,9 +87,10 @@ outright, the next barracks command reaps the lease.`),
 				return fmt.Errorf("cannot identify this process (pid %d): the prober returned no identity token", selfPID)
 			}
 
-			res, err := env.engine.Spawn(cmd.Context(), spawn.Request{
+			env.announceSelection(sel)
+			env.warnLaunchedAgentExcluded(sel, launched)
+			results, err := env.spawnAll(cmd.Context(), spawn.Request{
 				Loadout: l,
-				Target:  tgt,
 				Global:  global,
 				Cwd:     env.Cwd,
 				Kind:    lease.KindProcess,
@@ -84,18 +99,25 @@ outright, the next barracks command reaps the lease.`),
 					StartToken: selfToken,
 					Command:    "barracks run",
 				},
-			})
+			}, sel.Targets)
 			if err != nil {
 				return err
 			}
-			printSpawn(env, res, tgt)
+			leases := make([]*lease.Lease, 0, len(results))
+			for i, res := range results {
+				printSpawn(env, res, sel.Targets[i])
+				leases = append(leases, res.Lease)
+			}
 
-			code, runErr := env.runChild(argv, res.Lease)
+			code, runErr := env.runChild(argv, leases)
 
-			rep := lease.Revoke(res.Lease, env.store, env.leases, "command exited")
-			fmt.Fprintf(env.Out, "recalled %s from %s (%d %s)\n",
-				res.Lease.Loadout, res.Lease.Dir, len(rep.Removed), plural(len(rep.Removed), "skill", "skills"))
-			reportKept(env.Err, rep)
+			for _, spawned := range leases {
+				rep := lease.Revoke(spawned, env.store, env.leases, "command exited")
+				fmt.Fprintf(env.Out, "recalled %s from %s (%s, %d %s)\n",
+					spawned.Loadout, spawned.Dir, displayOf(spawned.Target),
+					len(rep.Removed), plural(len(rep.Removed), "skill", "skills"))
+				reportKept(env.Err, rep)
+			}
 
 			if runErr != nil {
 				return runErr
@@ -106,14 +128,14 @@ outright, the next barracks command reaps the lease.`),
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&global, "global", false, "spawn into the agent's user-level skills directory")
-	cmd.Flags().StringVar(&targetID, "target", target.DefaultID, targetFlagHelp())
+	cmd.Flags().BoolVar(&global, "global", false, "spawn into each agent's user-level skills directory")
+	cmd.Flags().StringSliceVar(&targetIDs, "target", nil, targetFlagHelp("spawn for"))
 	return cmd
 }
 
-// runChild starts argv, hands the lease over to it, forwards interrupts, and
+// runChild starts argv, hands every lease over to it, forwards interrupts, and
 // waits. It returns the child's exit code.
-func (e *Env) runChild(argv []string, l *lease.Lease) (int, error) {
+func (e *Env) runChild(argv []string, leases []*lease.Lease) (int, error) {
 	child := exec.Command(argv[0], argv[1:]...)
 	child.Stdin = os.Stdin
 	child.Stdout = e.Out
@@ -124,7 +146,9 @@ func (e *Env) runChild(argv []string, l *lease.Lease) (int, error) {
 		return 0, fmt.Errorf("run %s: %w", argv[0], err)
 	}
 
-	e.handOverLease(l, child.Process.Pid, argv[0])
+	for _, l := range leases {
+		e.handOverLease(l, child.Process.Pid, argv[0])
+	}
 
 	// Forward interrupts rather than dying on them, so the deferred recall in
 	// the caller always gets to run.

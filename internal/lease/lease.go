@@ -221,11 +221,41 @@ func (s *Store) List() ([]*Lease, []error) {
 	return out, problems
 }
 
-// FindInDir returns the leases materialised into dir.
-func FindInDir(leases []*Lease, dir string) []*Lease {
+// FindInScope returns the leases belonging to one place rather than one
+// directory: every target inside the repository rooted at root, or every
+// user-level spawn when scope is global.
+//
+// A loadout may be deployed into several agents at once, so commands that act
+// on "here" have to reason about the repository, not about one agent's skills
+// directory.
+func FindInScope(leases []*Lease, scope Scope, root string) []*Lease {
 	var out []*Lease
 	for _, l := range leases {
-		if sameDir(l.Dir, dir) {
+		if l.Scope != scope {
+			continue
+		}
+		if scope == ScopeRepo && !sameDir(l.Root, root) {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// WithTargets keeps only the leases deployed into one of the given target IDs.
+// An empty list means every target, so a caller can pass a --target filter
+// straight through.
+func WithTargets(leases []*Lease, ids []string) []*Lease {
+	if len(ids) == 0 {
+		return leases
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	var out []*Lease
+	for _, l := range leases {
+		if want[l.Target] {
 			out = append(out, l)
 		}
 	}
