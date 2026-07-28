@@ -1,10 +1,16 @@
 BIN       := bin
+MODULE    := github.com/tobi404/barracks
+STAMP     := $(MODULE)/internal/buildinfo
 VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS   := -X main.version=$(VERSION)
+COMMIT    ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+DATE      ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS   := -X $(STAMP).Version=$(VERSION) -X $(STAMP).Commit=$(COMMIT) -X $(STAMP).Date=$(DATE)
 COVER_MIN ?= 80.0
 LINT_VER  := $(shell cat .golangci-lint-version)
+GORL_VER  := $(shell cat .goreleaser-version)
 
-.PHONY: build install test cover cover-check lint fmt-check vet golangci fmt clean
+.PHONY: build install test cover cover-check lint fmt-check vet golangci fmt clean \
+	release-check release-snapshot
 
 build:
 	@mkdir -p $(BIN)
@@ -65,5 +71,19 @@ golangci:
 fmt:
 	gofmt -w .
 
+# Release packaging, at the version .goreleaser-version pins. The release
+# workflow runs the same targets, so a config error is caught here rather than
+# on a tag.
+release-check:
+	go run github.com/goreleaser/goreleaser/v2@$(GORL_VER) check
+
+# Everything a real release does - every platform, archives, checksums, and the
+# Homebrew cask - written to dist/ and published nowhere. HOMEBREW_TAP_GITHUB_TOKEN
+# is only read when publishing, so a dummy value is enough to render the cask.
+release-snapshot:
+	HOMEBREW_TAP_GITHUB_TOKEN=$${HOMEBREW_TAP_GITHUB_TOKEN:-snapshot-not-a-real-token} \
+		go run github.com/goreleaser/goreleaser/v2@$(GORL_VER) release \
+		--snapshot --clean --skip=publish,announce,validate
+
 clean:
-	rm -rf $(BIN) coverage.out
+	rm -rf $(BIN) coverage.out dist

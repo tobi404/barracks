@@ -8,7 +8,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version is stamped at build time.
+// Version is what `--version` prints. Main overwrites it with the line each
+// binary's entry point hands in; internal/buildinfo is where that line is built
+// and where the link-time stamping lives.
 var Version = "dev"
 
 // ExitError carries a child process's exit code out through cobra.

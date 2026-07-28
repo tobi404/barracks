@@ -1,0 +1,150 @@
+# Release packaging for barracks.
+#
+# Run it locally with `make release-check` (validate) and `make release-snapshot`
+# (build every platform, archive, checksum, and render the Homebrew cask into
+# dist/ without publishing anything). The release workflow runs the same binary
+# at the version pinned in .goreleaser-version - that file is the only place the
+# version is written.
+version: 2
+
+project_name: barracks
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  # Two binaries, one program. brk is the short alias; both must ship in every
+  # archive or a Homebrew install would leave half the command surface missing.
+  - id: barracks
+    main: .
+    binary: barracks
+    env:
+      - CGO_ENABLED=0 # nothing in barracks needs cgo; a static binary travels
+    flags:
+      - -trimpath # keep the build path out of the binary
+    ldflags:
+      - -s -w
+      - -X github.com/tobi404/barracks/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/tobi404/barracks/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/tobi404/barracks/internal/buildinfo.Date={{ .CommitDate }}
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    # The commit date, not the build clock, so rebuilding a tag produces the
+    # same bytes.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: brk
+    main: ./cmd/brk
+    binary: brk
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/tobi404/barracks/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/tobi404/barracks/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/tobi404/barracks/internal/buildinfo.Date={{ .CommitDate }}
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: barracks
+    ids: [barracks, brk] # one archive carrying both binaries
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE # a downloaded archive has to carry the grant of rights with it
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  github:
+    owner: tobi404
+    name: barracks
+  # A tag with a prerelease suffix (v1.2.0-rc.1) is published as a prerelease;
+  # a plain tag is not.
+  prerelease: auto
+  # `.Prerelease` is the tag's suffix, empty for a stable tag. The cask is not
+  # pushed for a prerelease (see skip_upload below), so advertising
+  # `brew install` on a release candidate's page would hand the reader the
+  # previous stable build instead of the one they came to try.
+  footer: |
+    ## Install
+
+    {{ if .Prerelease }}This is a prerelease, so the Homebrew tap is deliberately not
+    updated for it: `brew install tobi404/tap/barracks` still serves the latest stable
+    version. To try this build, download the archive for your platform from the assets
+    above and check it against `checksums.txt`.{{ else }}```bash
+    brew install tobi404/tap/barracks
+    ```{{ end }}
+
+# A cask, not a formula: GoReleaser deprecated `brews` in favour of
+# `homebrew_casks` and `goreleaser check` fails on the old key. Casks are macOS
+# only, so Homebrew on Linux is not an install path - the README sends Linux
+# users to `go install` or the tarball.
+homebrew_casks:
+  - name: barracks
+    ids: [barracks] # the archive id, which carries both binaries
+    repository:
+      owner: tobi404
+      name: homebrew-tap
+      branch: main
+      # Pushing to a second repository needs a token the workflow's default
+      # GITHUB_TOKEN cannot be. .github/workflows/release.yml refuses to start
+      # when this secret is missing, rather than publishing a release whose
+      # cask never lands.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    # The literal string "auto", quoted so YAML cannot turn it into a boolean:
+    # GoReleaser skips the cask push only when the value is exactly that
+    # (internal/pipe/cask/cask.go). A prerelease tag still builds and publishes
+    # its GitHub release with binaries and checksums, but leaves the tap alone,
+    # so `brew install tobi404/tap/barracks` always serves the latest stable
+    # version.
+    skip_upload: "auto"
+    homepage: https://github.com/tobi404/barracks
+    # Currently a no-op - GoReleaser records that casks do not support it yet
+    # (pkg/config/config.go) - but the metadata should not contradict LICENSE.
+    license: MIT
+    # Homebrew's own style check rejects a desc of 80 characters or more.
+    description: Spawn agent skill loadouts into any repo, or just for one session
+    # brk is the alias people actually type. A cask that linked only barracks
+    # would be a half-install, so both are named explicitly.
+    binaries:
+      - barracks
+      - brk
+    # The binaries are not notarized, so macOS quarantines them on download and
+    # the first run would be killed by Gatekeeper. Homebrew's own recommendation
+    # for unsigned binaries is to clear the attribute at install time.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status.zero?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/barracks"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/brk"]
+          end
+    # No zap stanza: GoReleaser renders one with indentation `brew style`
+    # rejects, and `~/.barracks` is a store shared with `go install`ed copies -
+    # an uninstall has no business assuming it may go.
+    commit_author:
+      name: barracks-release
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    commit_msg_template: "barracks {{ .Tag }}"

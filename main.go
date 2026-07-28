@@ -5,12 +5,10 @@ package main
 import (
 	"os"
 
+	"github.com/tobi404/barracks/internal/buildinfo"
 	"github.com/tobi404/barracks/internal/cli"
 )
 
-// version is overridden at build time with -ldflags "-X main.version=...".
-var version = "dev"
-
 func main() {
-	os.Exit(cli.Main(os.Args[1:], version))
+	os.Exit(cli.Main(os.Args[1:], buildinfo.String()))
 }
