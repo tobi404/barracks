@@ -168,6 +168,12 @@ deliberate decision, not a refactor.
 - `upgrade` reconciles spawns onto the commit each source is *pinned at*, not just onto a ref
   that moved. That is what lets a spawn it deliberately skipped (one held by a live process)
   be brought forward by a later run instead of being stranded at an old commit forever.
+- A lease record can be rewritten *while its holder runs*: `upgrade --include-running`
+  relinks a live spawn and saves the new targets. So `cli/run` re-reads the record at exit
+  rather than revoking from the copy it captured at spawn time - the stale copy cannot prove
+  the relinked symlink is barracks', so it would keep it and call it foreign. When the
+  re-read fails, the copy is still safe to revoke from but incomplete, so the record is kept
+  for the next reap. `TestRunRecallsAfterUpgradeRelinkedItsSpawn` guards this.
 - When two loadouts spawn into one directory, the second records no created directories.
   `spawn.withInheritedDirs` copies the chain from the existing lease so whichever lease is
   revoked last can finish the cleanup.
