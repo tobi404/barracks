@@ -31,7 +31,22 @@ func DefaultEnv() (*Env, error) {
 		Git:    gitcmd.Git{},
 		Getenv: os.Getenv,
 		Home:   os.UserHomeDir,
+		Tty:    stdoutIsTerminal,
 	}, nil
+}
+
+// stdoutIsTerminal reports whether stdout is attached to a terminal rather than
+// a pipe, a file, or whatever CI hands a process.
+//
+// A character device is the test because it needs no dependency and no syscall
+// this program does not already make: a pipe and a regular file are both
+// something else, which is the only distinction the flavor line cares about.
+func stdoutIsTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 func asExitError(err error, target **ExitError) bool {

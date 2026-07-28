@@ -63,6 +63,9 @@ it shows up in git status for review like any other.
 			if err != nil {
 				return err
 			}
+			// A recall undoes a spawn, so it is scoped the same way - see
+			// actedIn.
+			env.actedIn(loc)
 
 			leases, problems := env.leases.List()
 			for _, p := range problems {

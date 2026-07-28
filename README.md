@@ -31,6 +31,7 @@ barracks run frontend -- claude                            # or just for one ses
 | Check a checkout matches what was committed | [`barracks inspect`](#barracks-inspect) |
 | Understand source syntax | [Source syntax](#source-syntax) |
 | Know what it touches on disk | [What it does to your repo](#what-it-does-to-your-repo) |
+| Turn off the line it signs off with | [Voice](#voice) |
 | See which agents are supported | [Targets](#targets) |
 | Choose which agents a loadout installs into | [Choosing targets](#choosing-targets) |
 | Add support for another agent | [Adding a target](#adding-a-target) |
@@ -446,6 +447,35 @@ marks the ones this repository is already set up for.
 
 ---
 
+## Voice
+
+`train`, `equip`, `spawn`, `recall`, `upgrade`, `garrison` and `run` each sign off with one
+short line from the unit that just took the order. Ask for the same thing again and again
+and it gets progressively more put-upon; leave it alone for a while and it greets you
+fresh. Asking somewhere else does not count as asking again: `spawn frontend` in a second
+repository is a first spawn there, and starts over.
+
+```
+$ barracks spawn frontend
+spawned frontend into /home/you/app/.claude/skills (Claude Code, until recalled)
+  + react
+  + css
+  ▸ Off to the front.
+```
+
+It is decoration, so it keeps out of the way of everything that matters:
+
+- **Only on a terminal.** Piped, redirected, or running in CI there is no line at all, and
+  no flag is needed to get that.
+- **Only on stderr**, so `barracks list | grep react` is never polluted even interactively.
+- **Never on a failure**, and never from a command that only reports - `list`, `deployed`,
+  `inspect` and `targets` say nothing, and neither does a preview like
+  `upgrade --dry-run`, which also leaves the unit as fresh as it found it.
+
+Turn it off for one command with `--quiet` (`-q`), or for good with `BARRACKS_QUIET=1`.
+
+---
+
 ## Personal or shared
 
 There are two ways to put a loadout in a repository, and they are for different jobs.
@@ -555,7 +585,8 @@ removed. Anything else - edited, replaced, or never recorded at all - is kept an
 ├── loadouts/       # one hand-editable YAML file per loadout
 ├── store/          # <host>/<owner>/<repo>@<commit>/ - fetched once, shared by everything
 ├── mirrors/        # bare git mirrors, so a repo is cloned at most once
-└── leases/         # one record per live spawn - never for a garrison
+├── leases/         # one record per live spawn - never for a garrison
+└── voice.yaml      # how put-upon the unit is - see Voice; delete it freely
 ```
 
 A garrison keeps nothing here. Its record is `barracks.lock`, committed at the root of the

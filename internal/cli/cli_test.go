@@ -29,6 +29,24 @@ type harness struct {
 	prober *stubProber
 	env    map[string]string
 	home   string
+
+	// tty forces the terminal condition the flavor line is gated on. It is off
+	// by default, which is why the rest of the suite never sees a flavor line -
+	// exactly as a pipe or a CI runner would not. See voice_test.go.
+	tty bool
+	// rnd makes the choice between a step's interchangeable lines
+	// deterministic. Nil leaves the real source in place.
+	rnd func() uint64
+	// cwd overrides the directory a run happens in, for the tests that need a
+	// second repository. Empty means the harness's own work repo.
+	cwd string
+}
+
+func (h *harness) workingDir() string {
+	if h.cwd != "" {
+		return h.cwd
+	}
+	return h.work.Dir
 }
 
 type stubProber struct {
@@ -78,13 +96,15 @@ func (h *harness) run(args ...string) (string, string, error) {
 	env := &Env{
 		Out:    &out,
 		Err:    &errb,
-		Cwd:    h.work.Dir,
+		Cwd:    h.workingDir(),
 		Layout: h.layout,
 		Now:    func() time.Time { return h.now },
 		Prober: h.prober,
 		Git:    gitcmd.Git{},
 		Getenv: func(k string) string { return h.env[k] },
 		Home:   func() (string, error) { return h.home, nil },
+		Tty:    func() bool { return h.tty },
+		Rand:   h.rnd,
 	}
 	cmd := New(env)
 	cmd.SetArgs(args)

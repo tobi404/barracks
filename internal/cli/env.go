@@ -6,8 +6,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/tobi404/barracks/internal/garrison"
@@ -18,6 +20,7 @@ import (
 	"github.com/tobi404/barracks/internal/proc"
 	"github.com/tobi404/barracks/internal/spawn"
 	"github.com/tobi404/barracks/internal/store"
+	"github.com/tobi404/barracks/internal/voice"
 )
 
 // Env is the injectable environment a barracks invocation runs in.
@@ -32,11 +35,23 @@ type Env struct {
 	Getenv func(string) string
 	Home   func() (string, error)
 
+	// Tty reports whether stdout is a terminal. It is what keeps the flavor
+	// line out of pipes, redirects and CI without anyone passing a flag. A nil
+	// Tty means "not a terminal", so a test sees no flavor unless it asks for
+	// it deliberately.
+	Tty func() bool
+	// Rand picks between a step's interchangeable flavor lines. Tests set it to
+	// make the choice deterministic.
+	Rand func() uint64
+
 	loadouts  *loadout.Store
 	leases    *lease.Store
 	store     *store.Store
 	engine    *spawn.Engine
 	garrisons *garrison.Engine
+	speaker   *voice.Speaker
+	place     string
+	preview   bool
 }
 
 func (e *Env) now() time.Time {
@@ -72,7 +87,94 @@ func (e *Env) init() error {
 		Now:      e.now,
 		Loadouts: e.loadouts,
 	}
+	e.speaker = &voice.Speaker{
+		Path: voice.StatePath(e.Layout.Data),
+		Now:  e.now,
+		Rand: e.Rand,
+	}
 	return nil
+}
+
+// speak prints the flavor line for a command that has just succeeded.
+//
+// Every reason to stay quiet is gathered here, and all of them are checked
+// before a single byte is written: the line is decoration, so it must be
+// impossible for it to reach anything that is reading barracks rather than
+// watching it.
+func (e *Env) speak(command, subject string) {
+	if e.speaker == nil || e.preview || !e.isTerminal() || e.voiceOffByEnv() {
+		return
+	}
+	line := e.speaker.Line(command, subject, e.place)
+	if line == "" {
+		return
+	}
+	// stderr, always: `barracks list | grep react` must never see this, and
+	// neither must anything parsing the report the command just printed.
+	fmt.Fprintf(e.Err, "  %s %s\n", voice.Marker, line)
+}
+
+func (e *Env) isTerminal() bool {
+	return e.Tty != nil && e.Tty()
+}
+
+// previews marks this invocation as one that by design changes nothing, so it
+// neither speaks nor spends an escalation step. Both halves matter: a preview
+// that stayed silent but still counted would answer the first real change with
+// the wearier line and leave no trace of why.
+//
+// A command declares this for itself, exactly as it declares where it acted -
+// so any future flag that turns a command into a report is covered by saying so
+// rather than by teaching the voice about one flag's name. It is not a "did
+// anything actually change" test: an upgrade that finds every source already
+// current did the work and still speaks.
+func (e *Env) previews() {
+	e.preview = true
+}
+
+// actedIn records where a repository-scoped command did its work, so the flavor
+// line escalates per repository as well as per loadout.
+//
+// A command has to say this for itself rather than have it inferred: `spawn`,
+// `recall`, `garrison` and `run` act on a repository, while `train` and `equip`
+// act on the loadout wherever you happen to be standing, and `upgrade`
+// re-resolves sources for every spawn on the machine. Getting that wrong makes
+// the wearier lines describe a place the unit has never been.
+//
+// It is recorded from the location the command resolved, never from the raw
+// working directory, so running from a subdirectory is the same place.
+func (e *Env) actedIn(loc spawn.Location) {
+	if loc.Scope == lease.ScopeGlobal || loc.Root == "" {
+		// A global install is not in a repository at all. One stable name of
+		// its own beats whichever directory it was launched from.
+		e.place = "global"
+		return
+	}
+	e.place = loc.Root
+}
+
+// noteScope is actedIn for the two commands that do not otherwise need the
+// location. Failing to resolve it costs the escalation and nothing else.
+func (e *Env) noteScope(ctx context.Context, global bool) {
+	if loc, err := e.scopeOf(ctx, global); err == nil {
+		e.actedIn(loc)
+	}
+}
+
+// EnvQuiet turns the flavor line off permanently, for anyone who wants it gone
+// rather than gone-for-this-invocation.
+const EnvQuiet = "BARRACKS_QUIET"
+
+func (e *Env) voiceOffByEnv() bool {
+	if e.Getenv == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(e.Getenv(EnvQuiet))) {
+	case "", "0", "false", "no":
+		return false
+	default:
+		return true
+	}
 }
 
 // reap runs the lazy reaper. Every command calls this before its own work: an

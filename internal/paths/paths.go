@@ -16,7 +16,8 @@ const EnvHome = "BARRACKS_HOME"
 // Layout is the set of root directories barracks reads and writes.
 //
 // Config holds hand-editable loadout definitions. Data holds machine-managed
-// state: the source store, git mirrors, and lease records.
+// state: the source store, git mirrors, lease records, and the voice's
+// escalation state.
 type Layout struct {
 	Config string
 	Data   string

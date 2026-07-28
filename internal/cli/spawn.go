@@ -58,6 +58,10 @@ barracks run.`),
 			if err != nil {
 				return err
 			}
+			// A spawn is scoped to a repository, and so is the flavor line's
+			// escalation: the same loadout spawned somewhere new is a first
+			// spawn there, not a repeat.
+			env.noteScope(cmd.Context(), global)
 
 			req := spawn.Request{
 				Loadout: l,
