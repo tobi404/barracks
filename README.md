@@ -747,6 +747,18 @@ make release-snapshot   # build all four platforms, archive, checksum, render th
 `checksums.txt`, and `dist/homebrew/Casks/barracks.rb` are exactly what a real tag would
 produce, minus the upload.
 
+Both targets reach GoReleaser through `go run`, which builds the pinned version from
+source. GoReleaser's own Go requirement is much newer than the one barracks compiles
+against, so that only works because `GOTOOLCHAIN` defaults to `auto` on a developer
+machine and quietly fetches a newer toolchain. The release workflow cannot: `setup-go`
+pins `GOTOOLCHAIN=local`, so it installs the pinned GoReleaser *binary* and passes it in
+as `make release-check GORELEASER=goreleaser`. Do the same when you want a local run to
+match what a tag will do:
+
+```bash
+GOTOOLCHAIN=local make release-check GORELEASER=/path/to/goreleaser
+```
+
 ---
 
 ## Not built yet
