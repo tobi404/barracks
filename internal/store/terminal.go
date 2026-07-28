@@ -95,10 +95,10 @@ var silentHelpers = map[string]bool{
 	// comes from git's own prompt.c, linked in through libgit.a, and every path
 	// there is gated by GIT_TERMINAL_PROMPT - which gitcmd sets to 0 and which
 	// git propagates to helper subprocesses through the environment.
-	"cache": true,
+	"store": true,
 	// Talks to git-credential-cache--daemon over a unix socket. Same libgit.a
 	// linkage and the same GIT_TERMINAL_PROMPT gate as store.
-	"store": true,
+	"cache": true,
 }
 
 // Deliberately absent, and not to be added back: manager-core (and manager).
