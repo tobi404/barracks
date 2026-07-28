@@ -31,6 +31,7 @@ barracks run frontend -- claude                            # or just for one ses
 | Check a checkout matches what was committed | [`barracks inspect`](#barracks-inspect) |
 | Understand source syntax | [Source syntax](#source-syntax) |
 | Know what it touches on disk | [What it does to your repo](#what-it-does-to-your-repo) |
+| Turn off the line it signs off with | [Voice](#voice) |
 | See which agents are supported | [Targets](#targets) |
 | Choose which agents a loadout installs into | [Choosing targets](#choosing-targets) |
 | Add support for another agent | [Adding a target](#adding-a-target) |
@@ -448,11 +449,11 @@ marks the ones this repository is already set up for.
 
 ## Voice
 
-A command that changes something - `train`, `equip`, `spawn`, `recall`, `upgrade`,
-`garrison`, `run` - signs off with one short line from the unit that just took the order.
-Ask for the same thing again and again and it gets progressively more put-upon; leave it
-alone for a while and it greets you fresh. Asking somewhere else does not count as asking
-again: `spawn frontend` in a second repository is a first spawn there, and starts over.
+`train`, `equip`, `spawn`, `recall`, `upgrade`, `garrison` and `run` each sign off with one
+short line from the unit that just took the order. Ask for the same thing again and again
+and it gets progressively more put-upon; leave it alone for a while and it greets you
+fresh. Asking somewhere else does not count as asking again: `spawn frontend` in a second
+repository is a first spawn there, and starts over.
 
 ```
 $ barracks spawn frontend
@@ -584,7 +585,8 @@ removed. Anything else - edited, replaced, or never recorded at all - is kept an
 ├── loadouts/       # one hand-editable YAML file per loadout
 ├── store/          # <host>/<owner>/<repo>@<commit>/ - fetched once, shared by everything
 ├── mirrors/        # bare git mirrors, so a repo is cloned at most once
-└── leases/         # one record per live spawn - never for a garrison
+├── leases/         # one record per live spawn - never for a garrison
+└── voice.yaml      # how put-upon the unit is - see Voice; delete it freely
 ```
 
 A garrison keeps nothing here. Its record is `barracks.lock`, committed at the root of the
