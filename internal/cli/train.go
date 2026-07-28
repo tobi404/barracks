@@ -70,9 +70,9 @@ func newDisbandCmd(env *Env) *cobra.Command {
 		Long: strings.TrimSpace(`
 Deletes a loadout's definition.
 
-Disbanding refuses while the loadout is still spawned anywhere - recall it
-first. Nothing is removed from the shared store, so other loadouts using the
-same sources are unaffected.
+Disbanding refuses while the loadout is still spawned anywhere, or garrisoned in
+this repository - recall it first. Nothing is removed from the shared store, so
+other loadouts using the same sources are unaffected.
 
   barracks disband frontend`),
 		Args: cobra.ExactArgs(1),
@@ -83,6 +83,15 @@ same sources are unaffected.
 			for _, l := range leases {
 				if l.Loadout == name {
 					return fmt.Errorf("loadout %q is still deployed in %s; recall it first", name, l.Dir)
+				}
+			}
+			// A garrison keeps working without the definition - the lockfile
+			// records everything it needs - but deleting the definition of
+			// something visibly deployed here would be a surprise, and it is the
+			// definition an update reads from.
+			if loc, err := env.scopeOf(cmd.Context(), false); err == nil && loc.Root != "" {
+				if len(env.garrisonsHere(loc.Root, args, false)) > 0 {
+					return fmt.Errorf("loadout %q is garrisoned in %s; recall it first", name, loc.Root)
 				}
 			}
 			if err := env.loadouts.Delete(name); err != nil {

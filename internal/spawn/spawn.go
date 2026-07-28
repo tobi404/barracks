@@ -56,6 +56,19 @@ type Placed struct {
 	Source string
 }
 
+// Committed reports whether a repository's committed tier already claims a path.
+//
+// A personal spawn and a committed one must never hold the same path: one
+// registers it in .git/info/exclude as a symlink, the other commits it as a
+// file, and a repository holding both would either hide the committed file from
+// the team or be dirty forever. The check lives behind an interface so spawning
+// stays ignorant of what a lockfile is.
+type Committed interface {
+	// Claims returns the loadout that has committed path in the repository at
+	// root, if any.
+	Claims(root, path string) (string, bool)
+}
+
 // Engine carries the collaborators a spawn needs.
 type Engine struct {
 	Store  *store.Store
@@ -64,6 +77,9 @@ type Engine struct {
 	Now    func() time.Time
 	Env    func(string) string
 	Home   func() (string, error)
+	// Committed is optional: when set, a spawn refuses to land on a path the
+	// repository has committed.
+	Committed Committed
 }
 
 func (e *Engine) now() time.Time {
@@ -186,8 +202,18 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("loadout %q has no skills to spawn; equip it with a source first", req.Loadout.Name)
 	}
 
-	// Refuse before creating anything if a destination is taken.
+	// Refuse before creating anything if a destination is taken. A path the
+	// repository has committed counts even when the file is not there right now:
+	// the lockfile still claims it, and a symlink registered in
+	// .git/info/exclude on top of that claim is the one state that leaves a
+	// repository with the same path recorded two ways.
 	for _, s := range plan.Skills {
+		if e.Committed != nil && loc.Root != "" {
+			if by, claimed := e.Committed.Claims(loc.Root, s.Path); claimed {
+				return nil, fmt.Errorf("%w: %s is committed to this repository by loadout %s; a path cannot be both spawned and committed - use `barracks garrison` here, or `barracks recall %s` first",
+					ErrOccupied, s.Path, by, by)
+			}
+		}
 		if _, err := os.Lstat(s.Path); err == nil {
 			return nil, fmt.Errorf("%w: %s already exists and was not created by barracks", ErrOccupied, s.Path)
 		} else if !os.IsNotExist(err) {

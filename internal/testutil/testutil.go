@@ -192,6 +192,24 @@ func Exists(path string) bool {
 	return err == nil
 }
 
+// ReadFile returns a file's contents, failing the test if it cannot be read.
+// The committed tier writes real files, so tests assert on content rather than
+// on where a symlink points.
+func ReadFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(b)
+}
+
+// IsDir reports whether path is a real directory, following no links.
+func IsDir(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.IsDir()
+}
+
 // Entries lists the names directly inside dir, or nil when dir is absent.
 func Entries(t *testing.T, dir string) []string {
 	t.Helper()

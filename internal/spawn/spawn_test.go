@@ -730,3 +730,56 @@ func TestSpawnAllNeedsATarget(t *testing.T) {
 		t.Fatal("SpawnAll with no targets should fail rather than do nothing quietly")
 	}
 }
+
+// stubCommitted stands in for the committed tier without spawn having to know
+// what a lockfile is.
+type stubCommitted struct {
+	root string
+	rel  string
+}
+
+func (s stubCommitted) Claims(root, path string) (string, bool) {
+	if root != s.root {
+		return "", false
+	}
+	return "frontend", strings.HasSuffix(filepath.ToSlash(path), s.rel)
+}
+
+// TestSpawnRefusesAPathTheRepositoryHasCommitted keeps a repository from ever
+// holding the same path two ways: excluded from git as a symlink and committed
+// as a file. The claim is checked even though nothing is on disk, because the
+// lockfile still records it and a spawn there would hide that fact.
+func TestSpawnRefusesAPathTheRepositoryHasCommitted(t *testing.T) {
+	s := newScene(t)
+	root, err := filepath.EvalSymlinks(s.work.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.engine.Committed = stubCommitted{root: root, rel: ".claude/skills/react"}
+
+	_, err = s.engine.Spawn(ctx(), s.request(s.loadout(t, "frontend", "", nil, nil)))
+	if !errors.Is(err, ErrOccupied) {
+		t.Fatalf("Spawn = %v, want ErrOccupied", err)
+	}
+	if !strings.Contains(err.Error(), "committed to this repository by loadout frontend") {
+		t.Errorf("error does not explain the clash: %v", err)
+	}
+	if testutil.Exists(filepath.Join(s.skillsDir(), "css")) {
+		t.Error("a refused spawn left a partial deployment behind")
+	}
+	if got := s.work.ReadExclude(t); strings.Contains(got, "claude") {
+		t.Errorf("a refused spawn still registered exclude patterns:\n%s", got)
+	}
+}
+
+// TestSpawnWithoutACommittedGuardIsUnchanged: the check is opt-in, so a spawn
+// built without one behaves exactly as it always did.
+func TestSpawnWithoutACommittedGuardIsUnchanged(t *testing.T) {
+	s := newScene(t)
+	if s.engine.Committed != nil {
+		t.Fatal("the scene wired a committed guard")
+	}
+	if _, err := s.engine.Spawn(ctx(), s.request(s.loadout(t, "frontend", "", nil, nil))); err != nil {
+		t.Fatalf("Spawn = %v, want success", err)
+	}
+}

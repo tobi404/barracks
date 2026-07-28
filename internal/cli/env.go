@@ -10,6 +10,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/tobi404/barracks/internal/garrison"
 	"github.com/tobi404/barracks/internal/gitcmd"
 	"github.com/tobi404/barracks/internal/lease"
 	"github.com/tobi404/barracks/internal/loadout"
@@ -31,10 +32,11 @@ type Env struct {
 	Getenv func(string) string
 	Home   func() (string, error)
 
-	loadouts *loadout.Store
-	leases   *lease.Store
-	store    *store.Store
-	engine   *spawn.Engine
+	loadouts  *loadout.Store
+	leases    *lease.Store
+	store     *store.Store
+	engine    *spawn.Engine
+	garrisons *garrison.Engine
 }
 
 func (e *Env) now() time.Time {
@@ -58,6 +60,17 @@ func (e *Env) init() error {
 		Now:    e.now,
 		Env:    e.Getenv,
 		Home:   e.Home,
+		// A personal spawn must refuse to land on a path this repository has
+		// committed, and the committed tier must refuse the reverse. Both
+		// refusals are wired here so neither can be forgotten.
+		Committed: garrison.Guard{},
+	}
+	e.garrisons = &garrison.Engine{
+		Store:    e.store,
+		Leases:   e.leases,
+		Git:      e.Git,
+		Now:      e.now,
+		Loadouts: e.loadouts,
 	}
 	return nil
 }
