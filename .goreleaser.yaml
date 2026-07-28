@@ -1,0 +1,128 @@
+# Release packaging for barracks.
+#
+# Run it locally with `make release-check` (validate) and `make release-snapshot`
+# (build every platform, archive, checksum, and render the Homebrew formula into
+# dist/ without publishing anything). The release workflow runs the same binary
+# at the version pinned in .goreleaser-version - that file is the only place the
+# version is written.
+version: 2
+
+project_name: barracks
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  # Two binaries, one program. brk is the short alias; both must ship in every
+  # archive or a Homebrew install would leave half the command surface missing.
+  - id: barracks
+    main: .
+    binary: barracks
+    env:
+      - CGO_ENABLED=0 # nothing in barracks needs cgo; a static binary travels
+    flags:
+      - -trimpath # keep the build path out of the binary
+    ldflags:
+      - -s -w
+      - -X github.com/tobi404/barracks/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/tobi404/barracks/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/tobi404/barracks/internal/buildinfo.Date={{ .CommitDate }}
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    # The commit date, not the build clock, so rebuilding a tag produces the
+    # same bytes.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  - id: brk
+    main: ./cmd/brk
+    binary: brk
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/tobi404/barracks/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/tobi404/barracks/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/tobi404/barracks/internal/buildinfo.Date={{ .CommitDate }}
+    goos: [darwin, linux]
+    goarch: [arm64, amd64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: barracks
+    ids: [barracks, brk] # one archive carrying both binaries
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+
+release:
+  github:
+    owner: tobi404
+    name: barracks
+  # A tag with a prerelease suffix (v1.2.0-rc.1) is published as a prerelease;
+  # a plain tag is not.
+  prerelease: auto
+  footer: |
+    ## Install
+
+    ```bash
+    brew install tobi404/tap/barracks
+    ```
+
+# A cask, not a formula: GoReleaser deprecated `brews` in favour of
+# `homebrew_casks` and `goreleaser check` fails on the old key. Casks are macOS
+# only, so Homebrew on Linux is not an install path - the README sends Linux
+# users to `go install` or the tarball.
+homebrew_casks:
+  - name: barracks
+    ids: [barracks] # the archive id, which carries both binaries
+    repository:
+      owner: tobi404
+      name: homebrew-tap
+      branch: main
+      # Pushing to a second repository needs a token the workflow's default
+      # GITHUB_TOKEN cannot be. .github/workflows/release.yml refuses to start
+      # when this secret is missing, rather than publishing a release whose
+      # formula never lands.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/tobi404/barracks
+    description: Spawn agent skill loadouts into any repo - permanently, per project, or just for one session
+    # brk is the alias people actually type. A cask that linked only barracks
+    # would be a half-install, so both are named explicitly.
+    binaries:
+      - barracks
+      - brk
+    # The binaries are not notarized, so macOS quarantines them on download and
+    # the first run would be killed by Gatekeeper. Homebrew's own recommendation
+    # for unsigned binaries is to clear the attribute at install time.
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/barracks"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/brk"]
+          end
+    commit_author:
+      name: barracks-release
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    commit_msg_template: "barracks {{ .Tag }}"

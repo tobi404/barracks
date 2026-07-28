@@ -24,13 +24,42 @@ the darwin liveness probe untested. `.golangci-lint-version` is the only place t
 version is written: `make golangci` reads it, and the action reads the same file through
 its `version-file` input - bump it there, never inline. `noctx` is disabled in
 `.golangci.yml` on purpose - the reasoning is written in the config, next to the setting.
-Coverage floor is 80% (`COVER_MIN` in the `Makefile`). Add release automation as a separate
-workflow file rather than extending this one.
+Coverage floor is 80% (`COVER_MIN` in the `Makefile`). Release automation lives in its own
+workflow (`.github/workflows/release.yml`); never fold it into `ci.yml`.
 
 **Tests must never touch the network.** Build local git fixtures with
 `internal/testutil` (`NewSkillRepo` git-inits a temp dir with `SKILL.md` directories) and
 point sources at those paths. `internal/source` treats a filesystem path as a first-class
 source form precisely so this works.
+
+## Release
+
+Tagging `v*` runs `.github/workflows/release.yml`, which is GoReleaser
+(`.goreleaser.yaml`) at the version in `.goreleaser-version` - the only place that version
+is written, read by both `make release-check`/`make release-snapshot` and the workflow.
+`README.md`'s Releasing section is the human-facing contract (tag format, the
+`HOMEBREW_TAP_GITHUB_TOKEN` secret); the notes below are what the files themselves do not say.
+
+- **Prove release changes with `make release-snapshot`, never with a tag.** It produces
+  every archive, the checksums, and `dist/homebrew/Casks/barracks.rb` without publishing.
+  A tag is not a test fixture: Homebrew and `checksums.txt` both pin to it, so a pushed
+  tag can never be moved or reused.
+- **The token guard is the first step in the release job on purpose.** GoReleaser creates
+  the GitHub release before it pushes the Homebrew cask, so a missing
+  `HOMEBREW_TAP_GITHUB_TOKEN` discovered later would leave a published release that no
+  `brew install` can find. Anything else that can be checked before publishing belongs
+  above the GoReleaser step too.
+- **Version, commit, and date reach the binaries through `internal/buildinfo`, not
+  `main`.** Two `main` packages ship from this module; stamping an internal package means
+  one set of `-X` flags covers both. When the linker leaves them empty, `buildinfo`
+  recovers what it can from `debug.ReadBuildInfo` so a `go install`-ed binary still
+  reports its module version - hence the `(devel)` special case. Note that Go emits no
+  `vcs.*` settings from a linked git worktree, so that fallback looks dead when tested
+  from one; it is not.
+- **Homebrew is a cask (`homebrew_casks`), not a formula.** GoReleaser deprecated `brews`
+  and `goreleaser check` fails on it. Casks are macOS-only, which is why the README sends
+  Linux users to `go install` or the tarball, and why the cask carries a `postflight`
+  clearing `com.apple.quarantine` from both unsigned binaries.
 
 ## Invariants that must not be broken
 

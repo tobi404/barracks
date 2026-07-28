@@ -1,0 +1,81 @@
+name: Release
+
+# Cutting a release is a deliberate act: push a tag and this runs. Everything it
+# verifies lives in a Makefile target, exactly as ci.yml does - this file adds
+# packaging and publishing, and restates no check.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Read-only by default; the one job that publishes raises what it needs and no
+# more.
+permissions:
+  contents: read
+
+# A tag is published once. Two runs for one tag would race to create the same
+# GitHub release, so the second waits rather than being cancelled halfway
+# through publishing.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the GitHub release and upload its artifacts
+    steps:
+      # First, before anything is built or published. Publishing the Homebrew
+      # cask pushes to tobi404/homebrew-tap, a second repository the default
+      # GITHUB_TOKEN has no access to. Without this check GoReleaser would
+      # create the GitHub release, then fail at the cask step, leaving a release
+      # nobody can `brew install`. Failing here leaves nothing behind.
+      - name: require the Homebrew tap token
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -n "$HOMEBREW_TAP_GITHUB_TOKEN" ]; then
+            echo "HOMEBREW_TAP_GITHUB_TOKEN is set."
+            exit 0
+          fi
+          echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN is not set, so the Homebrew cask cannot be published to tobi404/homebrew-tap. No release was created. Add a fine-grained personal access token with Contents: read and write on tobi404/homebrew-tap (see the Releasing section of README.md), store it as the repository secret HOMEBREW_TAP_GITHUB_TOKEN, and re-run this workflow."
+          exit 1
+
+      # Full history and tags: GoReleaser derives the version from the tag and
+      # the changelog from the commits since the previous one.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Never release a red tree. Same gate ci.yml runs, same Makefile target.
+      - name: test and coverage
+        run: make cover-check
+
+      # Catches an invalid or deprecated .goreleaser.yaml before any release
+      # exists, which `goreleaser release` on its own would only warn about.
+      - name: check the release config
+        run: make release-check
+
+      # .goreleaser-version is the only place the GoReleaser version is written;
+      # the Makefile reads the same file.
+      - name: read the pinned GoReleaser version
+        id: goreleaser
+        run: echo "version=$(cat .goreleaser-version)" >> "$GITHUB_OUTPUT"
+
+      - uses: goreleaser/goreleaser-action@v7.2.3
+        with:
+          version: ${{ steps.goreleaser.outputs.version }}
+          args: release --clean
+        env:
+          # Creates the release, uploads the archives and checksums.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pushes the cask to tobi404/homebrew-tap.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
