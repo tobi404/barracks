@@ -35,24 +35,30 @@ type Speaker struct {
 // Line returns what the unit says after command succeeded, or "" when this
 // command has no voice.
 //
-// subject is what makes two invocations "the same": the loadout the command
-// acted on, or "" for a command that named none.
-func (s *Speaker) Line(command, subject string) string {
+// subject is the loadout the command acted on, and place is where it acted -
+// both are what make two invocations "the same". Either may be empty for a
+// command that has no such thing.
+func (s *Speaker) Line(command, subject, place string) string {
 	pool, ok := pools[command]
 	if !ok {
 		return ""
 	}
-	lines := pool[bump(s.Path, key(command, subject), s.now())]
+	lines := pool[bump(s.Path, key(command, subject, place), s.now())]
 	if len(lines) == 0 {
 		return ""
 	}
 	return lines[int(s.pick()%uint64(len(lines)))]
 }
 
-// key is what the escalation counts repeats of. Two spawns of different
-// loadouts are not a repeat; asking for the same one twice is.
-func key(command, subject string) string {
-	return command + "/" + strings.TrimSpace(subject)
+// key is what the escalation counts repeats of.
+//
+// Two spawns of different loadouts are not a repeat, and neither are two spawns
+// of one loadout into different repositories: the second is a genuine first
+// spawn there, and a wearier line would be describing a place the unit has
+// never been. A command that is not scoped to a place passes an empty one and
+// escalates on the loadout alone.
+func key(command, subject, place string) string {
+	return command + "/" + strings.TrimSpace(subject) + "@" + strings.TrimSpace(place)
 }
 
 func (s *Speaker) now() time.Time {

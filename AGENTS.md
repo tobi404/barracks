@@ -231,7 +231,14 @@ deliberate decision, not a refactor.
   only when stdout is a character device (`cli.stdoutIsTerminal`), and only from cobra's
   `PersistentPostRun`, which cobra skips once `RunE` has returned an error: that is what makes
   "never on a failure" structural. Nothing about the escalation state may affect anything but
-  which string is printed. That gating leaves the suite blind to it by default, so
+  which string is printed. **An escalated line may only express weariness at being asked
+  again, never assert that the deployment is already in place** - barracks cannot stand behind
+  the latter, because a spawn, a recall and a second spawn escalate too. For the same reason
+  the escalation key carries *where* a command acted (`cli.Env.actedIn`, from the resolved
+  repository root, with `--global` its own place): repository-scoped commands are `spawn`,
+  `recall`, `garrison` and `run`, while `train`, `equip` and `upgrade` are not, and each says
+  so for itself rather than having it inferred. That gating leaves the suite blind to it by
+  default, so
   `internal/cli/voice_test.go` forces `Env.Tty` on deliberately and pins `Env.Rand`; a voice
   change proved only by a passing suite is not proved at all. Lines must be **original** -
   this is a public repo, so no verbatim

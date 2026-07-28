@@ -6,6 +6,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -49,6 +50,7 @@ type Env struct {
 	engine    *spawn.Engine
 	garrisons *garrison.Engine
 	speaker   *voice.Speaker
+	place     string
 }
 
 func (e *Env) now() time.Time {
@@ -102,7 +104,7 @@ func (e *Env) speak(command, subject string) {
 	if e.speaker == nil || !e.isTerminal() || e.voiceOffByEnv() {
 		return
 	}
-	line := e.speaker.Line(command, subject)
+	line := e.speaker.Line(command, subject, e.place)
 	if line == "" {
 		return
 	}
@@ -113,6 +115,35 @@ func (e *Env) speak(command, subject string) {
 
 func (e *Env) isTerminal() bool {
 	return e.Tty != nil && e.Tty()
+}
+
+// actedIn records where a repository-scoped command did its work, so the flavor
+// line escalates per repository as well as per loadout.
+//
+// A command has to say this for itself rather than have it inferred: `spawn`,
+// `recall`, `garrison` and `run` act on a repository, while `train` and `equip`
+// act on the loadout wherever you happen to be standing, and `upgrade`
+// re-resolves sources for every spawn on the machine. Getting that wrong makes
+// the wearier lines describe a place the unit has never been.
+//
+// It is recorded from the location the command resolved, never from the raw
+// working directory, so running from a subdirectory is the same place.
+func (e *Env) actedIn(loc spawn.Location) {
+	if loc.Scope == lease.ScopeGlobal || loc.Root == "" {
+		// A global install is not in a repository at all. One stable name of
+		// its own beats whichever directory it was launched from.
+		e.place = "global"
+		return
+	}
+	e.place = loc.Root
+}
+
+// noteScope is actedIn for the two commands that do not otherwise need the
+// location. Failing to resolve it costs the escalation and nothing else.
+func (e *Env) noteScope(ctx context.Context, global bool) {
+	if loc, err := e.scopeOf(ctx, global); err == nil {
+		e.actedIn(loc)
+	}
 }
 
 // EnvQuiet turns the flavor line off permanently, for anyone who wants it gone

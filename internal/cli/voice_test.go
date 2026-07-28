@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tobi404/barracks/internal/testutil"
 	"github.com/tobi404/barracks/internal/voice"
 )
 
@@ -311,6 +314,83 @@ func TestEscalationIsPerLoadout(t *testing.T) {
 	first("frontend")
 	if got := first("backend"); got != fresh {
 		t.Errorf("a different loadout said %q, want the fresh %q", got, fresh)
+	}
+}
+
+// TestEscalationIsPerRepository is the defect this all exists to prevent: the
+// wearier lines make claims about a place, so spawning the same loadout into a
+// second repository must start fresh. Being told "the same front again" about a
+// repository the skills have never been in is a falsehood, not flavor.
+func TestEscalationIsPerRepository(t *testing.T) {
+	h := equipped(t)
+	h.rnd = func() uint64 { return 0 }
+	other := testutil.NewGitRepo(t, filepath.Join(h.root, "other"))
+	testutil.WriteFile(t, filepath.Join(other.Dir, "README.md"), "hello\n")
+	other.Commit(t, "initial")
+
+	spawn := func() string {
+		_, errb, err := h.run("spawn", "frontend")
+		if err != nil {
+			t.Fatalf("spawn in %s: %v\n%s", h.workingDir(), err, errb)
+		}
+		lines := flavor(errb)
+		if len(lines) != 1 {
+			t.Fatalf("want one flavor line, got %d:\n%s", len(lines), errb)
+		}
+		h.mustRun("recall", "frontend")
+		h.now = h.now.Add(time.Second)
+		return lines[0]
+	}
+
+	fresh := spawn()
+
+	// A different repository is a first spawn there, however recently the same
+	// loadout was spawned somewhere else.
+	h.cwd = other.Dir
+	if got := spawn(); got != fresh {
+		t.Errorf("a second repository said %q, want a fresh %q", got, fresh)
+	}
+
+	// So is a --global install, which is not in a repository at all.
+	h.cwd = ""
+	if _, errb, err := h.run("spawn", "frontend", "--global"); err != nil {
+		t.Fatalf("global spawn: %v\n%s", err, errb)
+	} else if got := flavor(errb); len(got) != 1 || got[0] != fresh {
+		t.Errorf("a global spawn said %v, want a fresh %q", got, fresh)
+	}
+	h.mustRun("recall", "frontend", "--global")
+	h.now = h.now.Add(time.Second)
+
+	// And repeating in the first repository still escalates.
+	if got := spawn(); got == fresh {
+		t.Errorf("a repeat in the same repository said %q again, want it wearier", got)
+	}
+}
+
+// TestRunningFromASubdirectoryIsTheSamePlace: the escalation keys on the
+// resolved repository root, so where in the tree you stand is not part of it.
+func TestRunningFromASubdirectoryIsTheSamePlace(t *testing.T) {
+	h := equipped(t)
+	h.rnd = func() uint64 { return 0 }
+	sub := filepath.Join(h.work.Dir, "packages", "web")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	spawn := func() string {
+		_, errb, err := h.run("spawn", "frontend")
+		if err != nil {
+			t.Fatalf("spawn from %s: %v\n%s", h.workingDir(), err, errb)
+		}
+		h.mustRun("recall", "frontend")
+		h.now = h.now.Add(time.Second)
+		return flavor(errb)[0]
+	}
+
+	fresh := spawn()
+	h.cwd = sub
+	if got := spawn(); got == fresh {
+		t.Errorf("a spawn from a subdirectory said %q, want the same repository's next step", got)
 	}
 }
 

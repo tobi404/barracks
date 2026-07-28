@@ -19,42 +19,51 @@ const Marker = "▸"
 // The house style, for anyone adding to these: two to five words, understated,
 // spoken by the unit about itself. Never addresses the reader, never mentions
 // files, flags or paths, never restates what the line above already said.
+//
+// And the rule that governs every line past the first step: an escalated line
+// says the unit is tired of being sent, never that the deployment is already in
+// place. "Already there." is a claim about state, and barracks cannot stand
+// behind it - a spawn, a recall and a second spawn escalate too, and the unit
+// very much did leave in between. Weariness at the repetition is always true
+// whenever the line can fire; a state claim is only sometimes true, and a voice
+// line that states a falsehood is worse than no voice line, because the reader
+// cannot tell flavor from fact.
 var pools = map[string][]step{
 	"train": {
 		{"Formed up.", "Fresh from the drills.", "A new banner raised."},
-		{"Formed up already.", "Drilled this one before.", "The banner is up."},
+		{"Again to the yard.", "Drilled this one before.", "More drilling, then."},
 		{"...drilling again.", "The parade ground wears thin.", "Marching in circles."},
-		{"We are trained!", "No more drills.", "Enough of the yard."},
+		{"Drilled and drilled again!", "No more drills.", "Enough of the yard."},
 	},
 	"equip": {
 		{"Kit issued.", "Sharpening up.", "The quartermaster obliges."},
-		{"Kit is already issued.", "Back at the armory.", "The same crate."},
+		{"Back for more kit.", "Back at the armory.", "The quartermaster sighs."},
 		{"...the pack is heavy.", "Carrying plenty already.", "Little room left."},
 		{"Hands are full!", "No more crates.", "The straps are creaking."},
 	},
 	"spawn": {
 		{"Off to the front.", "Moving out.", "Taking position."},
-		{"Already there.", "The position is held.", "Boots are on the ground."},
-		{"...still here.", "Not moved since.", "Same ground, same watch."},
-		{"We never left!", "This ground again.", "Nothing has changed here."},
+		{"The same front again.", "Marching out once more.", "Boots are on the ground."},
+		{"...the same ground again.", "Back to the same line.", "Same ground, same watch."},
+		{"Always this same ground!", "This ground again.", "This ground knows us."},
 	},
 	"recall": {
 		{"Falling back.", "Standing down.", "Marching home."},
-		{"Already fell back.", "Nothing left to pull.", "The line is empty."},
-		{"...nobody out there.", "Withdrawing from an empty field.", "The camp is packed."},
-		{"There is no one left!", "Recalling the wind.", "An empty field again."},
+		{"Falling back once more.", "Back down the road.", "Homeward, again."},
+		{"...back again already.", "The road home is worn.", "Marching back and forth."},
+		{"Nothing but marching!", "Recalling the wind.", "The road again!"},
 	},
 	"upgrade": {
-		{"New orders taken.", "Fresh supply.", "Blades reground."},
-		{"Orders unchanged.", "The supply already came.", "The blades are keen."},
-		{"...the same orders.", "The runner brought nothing.", "Barely sharper than yesterday."},
-		{"The orders will not change!", "Nothing new arrives.", "No word from command."},
+		{"To the depot.", "Off to the quartermaster.", "The runner sets out."},
+		{"The runner returns.", "Back to the depot.", "Sent to the depot again."},
+		{"...to the depot again.", "This errand wears thin.", "Another trip, another errand."},
+		{"Always the same errand!", "The depot and back, again.", "Enough of this road."},
 	},
 	"garrison": {
 		{"Manning the walls.", "Colors planted.", "Settling into the fort."},
-		{"The walls are manned.", "The colors already fly.", "Quarters are taken."},
+		{"The walls are manned.", "The colors are up.", "Quarters are taken."},
 		{"...the same wall.", "The stones have not moved.", "A long watch."},
-		{"The wall is manned!", "Nothing approaches this gate.", "The same stones again."},
+		{"The wall is manned!", "Still this same gate!", "The same stones again."},
 	},
 	"run": {
 		{"Marching alongside.", "Right behind.", "Falling in."},

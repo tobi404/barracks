@@ -37,6 +37,16 @@ type harness struct {
 	// rnd makes the choice between a step's interchangeable lines
 	// deterministic. Nil leaves the real source in place.
 	rnd func() uint64
+	// cwd overrides the directory a run happens in, for the tests that need a
+	// second repository. Empty means the harness's own work repo.
+	cwd string
+}
+
+func (h *harness) workingDir() string {
+	if h.cwd != "" {
+		return h.cwd
+	}
+	return h.work.Dir
 }
 
 type stubProber struct {
@@ -86,7 +96,7 @@ func (h *harness) run(args ...string) (string, string, error) {
 	env := &Env{
 		Out:    &out,
 		Err:    &errb,
-		Cwd:    h.work.Dir,
+		Cwd:    h.workingDir(),
 		Layout: h.layout,
 		Now:    func() time.Time { return h.now },
 		Prober: h.prober,

@@ -37,7 +37,7 @@ func TestSilentCommandsHaveNoPool(t *testing.T) {
 	now := time.Now()
 	s := newSpeaker(t, &now, 0)
 	for _, c := range silent {
-		if got := s.Line(c, "frontend"); got != "" {
+		if got := s.Line(c, "frontend", "repo"); got != "" {
 			t.Errorf("Line(%q) = %q, want no line", c, got)
 		}
 	}
@@ -50,7 +50,7 @@ func TestEscalationClimbsThenResets(t *testing.T) {
 
 	var seen []string
 	for i := 0; i < steps+2; i++ {
-		seen = append(seen, s.Line("spawn", "frontend"))
+		seen = append(seen, s.Line("spawn", "frontend", "repo"))
 		now = now.Add(time.Second)
 	}
 
@@ -69,7 +69,7 @@ func TestEscalationClimbsThenResets(t *testing.T) {
 
 	// A quiet period puts it back at the top.
 	now = now.Add(Window)
-	if got := s.Line("spawn", "frontend"); got != pool[0][0] {
+	if got := s.Line("spawn", "frontend", "repo"); got != pool[0][0] {
 		t.Errorf("after the quiet window: %q, want a fresh %q", got, pool[0][0])
 	}
 }
@@ -80,14 +80,37 @@ func TestEscalationIsPerCommandAndLoadout(t *testing.T) {
 	now := time.Now()
 	s := newSpeaker(t, &now, 0)
 
-	s.Line("spawn", "frontend")
-	s.Line("spawn", "frontend")
+	s.Line("spawn", "frontend", "repo")
+	s.Line("spawn", "frontend", "repo")
 
-	if got, want := s.Line("spawn", "backend"), pools["spawn"][0][0]; got != want {
+	if got, want := s.Line("spawn", "backend", "repo"), pools["spawn"][0][0]; got != want {
 		t.Errorf("a different loadout said %q, want a fresh %q", got, want)
 	}
-	if got, want := s.Line("recall", "frontend"), pools["recall"][0][0]; got != want {
+	if got, want := s.Line("recall", "frontend", "repo"), pools["recall"][0][0]; got != want {
 		t.Errorf("a different command said %q, want a fresh %q", got, want)
+	}
+}
+
+// TestEscalationIsPerPlace: the same command on the same loadout somewhere else
+// is a genuine first time there, and must not inherit another place's weariness.
+func TestEscalationIsPerPlace(t *testing.T) {
+	now := time.Now()
+	s := newSpeaker(t, &now, 0)
+	fresh := pools["spawn"][0][0]
+
+	if got := s.Line("spawn", "frontend", "/home/me/project-a"); got != fresh {
+		t.Fatalf("first spawn said %q, want %q", got, fresh)
+	}
+	if got := s.Line("spawn", "frontend", "/home/me/project-b"); got != fresh {
+		t.Errorf("a different repository said %q, want a fresh %q", got, fresh)
+	}
+	// A global install is its own place, not whichever directory it ran from.
+	if got := s.Line("spawn", "frontend", "global"); got != fresh {
+		t.Errorf("a global spawn said %q, want a fresh %q", got, fresh)
+	}
+	// ...and repeating in the first repository still escalates.
+	if got := s.Line("spawn", "frontend", "/home/me/project-a"); got != pools["spawn"][1][0] {
+		t.Errorf("a repeat in the same repository said %q, want the next step", got)
 	}
 }
 
@@ -99,7 +122,7 @@ func TestStateDoesNotGrowForever(t *testing.T) {
 	s := newSpeaker(t, &now, 0)
 
 	for i := 0; i < 50; i++ {
-		s.Line("spawn", string(rune('a'+i%26))+string(rune('a'+i/26)))
+		s.Line("spawn", string(rune('a'+i%26))+string(rune('a'+i/26)), "repo")
 		now = now.Add(Window)
 	}
 	st := load(s.Path)
@@ -115,13 +138,13 @@ func TestPickVariesWithinAStep(t *testing.T) {
 	pool := pools["train"][0]
 	for i := range pool {
 		s := newSpeaker(t, &now, uint64(i))
-		if got, want := s.Line("train", "x"), pool[i]; got != want {
+		if got, want := s.Line("train", "x", "repo"), pool[i]; got != want {
 			t.Errorf("pick %d said %q, want %q", i, got, want)
 		}
 	}
 	// An arbitrarily large source still lands inside the pool.
 	s := newSpeaker(t, &now, ^uint64(0))
-	if got := s.Line("train", "x"); !contains(pool, got) {
+	if got := s.Line("train", "x", "repo"); !contains(pool, got) {
 		t.Errorf("line %q is not in the step's pool", got)
 	}
 }
@@ -142,7 +165,7 @@ func TestBrokenStateCostsOnlyTheEscalation(t *testing.T) {
 	}
 	for name, path := range cases {
 		s := &Speaker{Path: path, Now: func() time.Time { return now }, Rand: func() uint64 { return 0 }}
-		if got, want := s.Line("spawn", "frontend"), pools["spawn"][0][0]; got != want {
+		if got, want := s.Line("spawn", "frontend", "repo"), pools["spawn"][0][0]; got != want {
 			t.Errorf("%s: %q, want a fresh %q", name, got, want)
 		}
 	}
@@ -151,10 +174,10 @@ func TestBrokenStateCostsOnlyTheEscalation(t *testing.T) {
 // TestZeroSpeakerWorks: the defaults are real, not placeholders.
 func TestZeroSpeakerWorks(t *testing.T) {
 	var s Speaker
-	if got := s.Line("spawn", "frontend"); !contains(pools["spawn"][0], got) {
+	if got := s.Line("spawn", "frontend", "repo"); !contains(pools["spawn"][0], got) {
 		t.Errorf("zero Speaker said %q, want a step-0 spawn line", got)
 	}
-	if got := s.Line("list", "frontend"); got != "" {
+	if got := s.Line("list", "frontend", "repo"); got != "" {
 		t.Errorf("zero Speaker said %q for a silent command", got)
 	}
 }

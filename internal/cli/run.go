@@ -70,6 +70,8 @@ outright, the next barracks command reaps the lease.`),
 			if err != nil {
 				return err
 			}
+			// Like a spawn, a run is scoped to a repository - see actedIn.
+			env.noteScope(cmd.Context(), global)
 
 			// The lease is born owned by this process, which is certainly
 			// alive, and handed to the child once it starts. There is never a

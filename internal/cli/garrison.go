@@ -72,6 +72,9 @@ on this machine. Use barracks inspect to see whether a checkout needs it.`),
 			if err != nil {
 				return err
 			}
+			// The committed tier is a repository's own, so the flavor line's
+			// escalation is too - see actedIn.
+			env.actedIn(loc)
 
 			if len(args) == 0 {
 				if len(targetIDs) > 0 {

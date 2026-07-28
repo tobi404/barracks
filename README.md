@@ -450,8 +450,9 @@ marks the ones this repository is already set up for.
 
 A command that changes something - `train`, `equip`, `spawn`, `recall`, `upgrade`,
 `garrison`, `run` - signs off with one short line from the unit that just took the order.
-Ask for the same thing on the same loadout again and again and it gets progressively more
-put-upon; leave it alone for a while and it greets you fresh.
+Ask for the same thing again and again and it gets progressively more put-upon; leave it
+alone for a while and it greets you fresh. Asking somewhere else does not count as asking
+again: `spawn frontend` in a second repository is a first spawn there, and starts over.
 
 ```
 $ barracks spawn frontend
