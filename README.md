@@ -151,7 +151,8 @@ barracks deployed --everywhere   # every live spawn on this machine
 
 ### `barracks list`
 
-Shows every loadout you have trained, with its sources and skill count.
+Shows every loadout you have trained, with its sources, skill count, and the agents it
+installs into.
 
 ```bash
 barracks list
