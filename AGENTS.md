@@ -44,6 +44,12 @@ is written, read by both `make release-check`/`make release-snapshot` and the wo
   every archive, the checksums, and `dist/homebrew/Casks/barracks.rb` without publishing.
   A tag is not a test fixture: Homebrew and `checksums.txt` both pin to it, so a pushed
   tag can never be moved or reused.
+- **The binaries reproduce; the archives do not.** `-trimpath`, `CGO_ENABLED=0` and
+  `mod_timestamp: {{ .CommitTimestamp }}` make two builds of one tag produce bit-identical
+  binaries (verified by diffing their hashes across three runs). The `.tar.gz` around them
+  still varies, because GoReleaser does not fix the order of entries in the archive. Do
+  not promise archive-level reproducibility; the published `checksums.txt` is what a
+  downloader verifies against.
 - **The token guard is the first step in the release job on purpose.** GoReleaser creates
   the GitHub release before it pushes the Homebrew cask, so a missing
   `HOMEBREW_TAP_GITHUB_TOKEN` discovered later would leave a published release that no
