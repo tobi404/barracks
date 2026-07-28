@@ -50,7 +50,8 @@ barracks run frontend -- claude                            # or just for one ses
 brew install tobi404/tap/barracks
 ```
 
-Installs both `barracks` and `brk`. Upgrade with `brew upgrade barracks`.
+Installs both `barracks` and `brk`, and installs `git` if you do not have it - barracks
+shells out to git for every fetch and every resolve. Upgrade with `brew upgrade barracks`.
 
 ### Go
 

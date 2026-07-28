@@ -85,6 +85,16 @@ is written, read by both `make release-check`/`make release-snapshot` and the wo
   `brew install` line the tap will not serve. `goreleaser check` does not render
   templates, so a footer change is only proved by reading the notes a tagged dry run
   produces in a throwaway clone.
+- **The cask's git requirement is `dependencies: [- formula: git]`, not Homebrew's own
+  `depends_on`.** GoReleaser renders the latter from the former
+  (`internal/pipe/cask/templates/cask.rb`); the field name and the formula/cask split are in
+  `pkg/config/config.go`. Verify a rendered cask by copying `dist/homebrew/Casks/barracks.rb`
+  into a throwaway tap under `$(brew --repository)/Library/Taps/` - Homebrew refuses to look
+  at a cask outside one - and reading `brew info --cask`, which reports the dependency it
+  actually parsed. `brew style` flags GoReleaser's `depends_on` array indentation and stanza
+  grouping; those are RuboCop layout complaints about generated Ruby, not something
+  `brew install` cares about, and the rendered cask already carried one such offence before
+  the dependency existed. Do not hand-write the stanza through `custom_block` to silence them.
 
 ## Invariants that must not be broken
 
