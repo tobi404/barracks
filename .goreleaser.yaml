@@ -126,6 +126,15 @@ homebrew_casks:
     license: MIT
     # Homebrew's own style check rejects a desc of 80 characters or more.
     description: Spawn agent skill loadouts into any repo, or just for one session
+    # barracks shells out to git for every fetch, resolve, and repository lookup,
+    # so a machine without it has a barracks that cannot do anything. Declaring
+    # it makes Homebrew satisfy the requirement at install time instead of the
+    # user meeting it as a failure on their first command. The key is
+    # `dependencies`, not Homebrew's own `depends_on`: GoReleaser renders the
+    # latter from the former (internal/pipe/cask/templates/cask.rb), and `git` is
+    # a formula rather than a cask.
+    dependencies:
+      - formula: git
     # brk is the alias people actually type. A cask that linked only barracks
     # would be a half-install, so both are named explicitly.
     binaries:

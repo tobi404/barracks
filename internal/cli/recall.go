@@ -32,6 +32,12 @@ A skill directory you made yourself cannot be destroyed by a recall.
 The .git/info/exclude entries are removed too, so the repo goes back byte for
 byte.
 
+A loadout garrisoned into this repository is recalled too, because it is
+deployed here just as much as a spawn is. Its committed files are removed only
+where they still match the digest barracks.lock recorded; a file edited since it
+was committed is kept and reported. The removal is a change to tracked files, so
+it shows up in git status for review like any other.
+
   barracks recall frontend
   barracks recall frontend --target cursor
   barracks recall frontend --global
@@ -70,12 +76,27 @@ byte.
 					matched = append(matched, l)
 				}
 			}
-			if len(matched) == 0 {
+			// A garrison is held by no lease and has no per-target record to
+			// narrow by: it is one committed unit, so a --target or --global
+			// recall leaves it alone rather than half-removing it.
+			var garrisoned []string
+			if len(filter) == 0 && !global {
+				garrisoned = env.garrisonsHere(loc.Root, args, all)
+			}
+
+			if len(matched) == 0 && len(garrisoned) == 0 {
 				where := scopeLabel(loc, global) + targetSuffix(filter)
 				if all {
 					return fmt.Errorf("nothing is deployed %s", where)
 				}
 				return fmt.Errorf("%s is not deployed %s", args[0], where)
+			}
+			for _, name := range garrisoned {
+				rep, err := env.garrisons.Remove(loc.Root, name)
+				if err != nil {
+					return err
+				}
+				printGarrisonRemoval(env, rep)
 			}
 
 			for _, l := range matched {

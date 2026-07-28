@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tobi404/barracks/internal/garrison"
 	"github.com/tobi404/barracks/internal/lease"
 )
 
@@ -17,7 +18,7 @@ func newDeployedCmd(env *Env) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "deployed",
-		Short: "Show what is currently spawned here",
+		Short: "Show what is currently deployed here, spawned or committed",
 		Long: strings.TrimSpace(`
 Shows the loadouts currently deployed in this repo, which agent each one went
 into, and how each one ends. The same loadout spawned into two agents shows up
@@ -27,8 +28,15 @@ Every barracks command reaps expired leases first, so what this prints is
 already up to date - a deadline that has passed or a run whose process exited
 will have been cleaned up before the list is drawn.
 
+Anything garrisoned here is listed too, marked [committed]. It is deployed in
+this repository as much as a spawn is - more permanently, in fact - and is read
+from barracks.lock rather than from a lease, so no lifetime governs it and no
+reap can end it.
+
 Use --everywhere to see every live spawn on the machine, including global ones
-and other repos.
+and other repos. It still only knows about this repository's barracks.lock:
+barracks keeps no machine-wide index of garrisons, because that record travels
+with the repository rather than with the machine.
 
   barracks deployed
   barracks deployed --target cursor
@@ -63,9 +71,37 @@ and other repos.
 			shown = lease.WithTargets(shown, filter)
 			where += targetSuffix(filter)
 
-			if len(shown) == 0 {
+			// A garrison is deployed here as much as a spawn is - more
+			// permanently, in fact - so leaving it out would make this command
+			// say "nothing deployed" in a repository full of committed skills.
+			// It has no lease, so it is listed from the lockfile instead.
+			// --everywhere still only knows about this repository's lockfile:
+			// barracks keeps no machine-wide index of garrisons, because the
+			// record travels with the repository rather than with the machine.
+			var committed []garrison.Garrison
+			if !global && len(filter) == 0 {
+				if loc, err := env.scopeOf(cmd.Context(), false); err == nil && loc.Root != "" {
+					if m, lerr := garrison.Load(loc.Root); lerr == nil {
+						committed = m.Garrisons
+					} else {
+						fmt.Fprintf(env.Err, "! %v\n", lerr)
+					}
+				}
+			}
+
+			if len(shown) == 0 && len(committed) == 0 {
 				fmt.Fprintf(env.Out, "nothing deployed %s\n", where)
 				return nil
+			}
+			for i := range committed {
+				g := &committed[i]
+				fmt.Fprintf(env.Out, "%s  %d %s  [committed]  until recalled\n",
+					g.Loadout, g.SkillCount(), plural(g.SkillCount(), "skill", "skills"))
+				fmt.Fprintf(env.Out, "    targets: %s\n", strings.Join(g.Targets, ", "))
+				fmt.Fprintf(env.Out, "    lockfile: %s (committed - no lease, never reaped)\n", garrison.LockName)
+				for _, s := range g.Skills {
+					fmt.Fprintf(env.Out, "      %s  <- %s  %s\n", s.Name, s.Source, s.Dir)
+				}
 			}
 			for _, l := range shown {
 				fmt.Fprintf(env.Out, "%s  %d %s  [%s]  %s\n",

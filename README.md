@@ -13,7 +13,8 @@ barracks makes a skill set a named, versioned, spawnable unit.
 ```bash
 barracks train frontend --target claude,cursor             # define a loadout
 barracks equip frontend gh:owner/skills#main:skills        # attach a source
-barracks spawn frontend                                    # materialise it here
+barracks spawn frontend                                    # materialise it here, for you
+barracks garrison frontend                                 # or commit it, for the whole team
 barracks run frontend -- claude                            # or just for one session
 ```
 
@@ -26,6 +27,8 @@ barracks run frontend -- claude                            # or just for one ses
 | Install it | [Install](#install) |
 | Learn the commands | [Commands](#commands) |
 | Keep skills up to date | [`barracks upgrade`](#barracks-upgrade-loadout) |
+| Share one skill set with my team | [Personal or shared](#personal-or-shared) |
+| Check a checkout matches what was committed | [`barracks inspect`](#barracks-inspect) |
 | Understand source syntax | [Source syntax](#source-syntax) |
 | Know what it touches on disk | [What it does to your repo](#what-it-does-to-your-repo) |
 | See which agents are supported | [Targets](#targets) |
@@ -47,7 +50,8 @@ barracks run frontend -- claude                            # or just for one ses
 brew install tobi404/tap/barracks
 ```
 
-Installs both `barracks` and `brk`. Upgrade with `brew upgrade barracks`.
+Installs both `barracks` and `brk`, and installs `git` if you do not have it - barracks
+shells out to git for every fetch and every resolve. Upgrade with `brew upgrade barracks`.
 
 ### Go
 
@@ -160,6 +164,81 @@ applies to this spawn only and never changes what the loadout declares. If any o
 fails, the whole spawn is rolled back - a two-agent spawn is one action, so it never half
 happens.
 
+A spawn is yours alone: symlinks into your own store, kept out of git, gone when the lease
+ends. To give a whole team one skill set, [garrison it](#barracks-garrison-loadout) instead.
+
+### `barracks garrison [<loadout>]`
+
+Stations a loadout in this repository permanently: **real skill files, committed**, plus a
+`barracks.lock` at the repository root recording exactly which sources and commits produced
+them.
+
+```bash
+barracks garrison frontend                 # commit it, or bring it onto new pins
+barracks garrison frontend --target cursor --target claude
+barracks garrison                          # put every garrison in barracks.lock back
+```
+
+Commit the skill files and `barracks.lock` together. They are deliberately **not** in
+`.git/info/exclude` - the whole point is that git tracks them - so `barracks garrison`
+leaves the working tree dirty on purpose, with a diff to review and commit. Once committed,
+`git status` is clean and stays clean.
+
+A teammate clones the repository and their agent sees the skills immediately: no barracks
+installed, nothing to set up, no network. Whether they have barracks decides only whether
+they can *check* and *change* the skill set, never whether they can use it.
+
+**Running it again is how an update happens.** The vendored files and `barracks.lock` are
+rewritten together, so a skill update arrives as one reviewable diff in a pull request
+instead of happening invisibly on each machine. Nothing is written until every check has
+passed, and a failure part-way through is rolled back - the files and the lockfile can never
+be left disagreeing. A run that changes nothing leaves `barracks.lock` byte-identical.
+
+**A vendored file you have edited stops the update**, naming the file. barracks will not
+discard your edit, and will not leave `barracks.lock` claiming content the file does not
+have:
+
+```
+barracks: vendored file modified locally: .claude/skills/react/SKILL.md
+these files have been edited since they were committed. Restore them
+(git checkout -- <path>) to keep the edit out of the way, or pass --force to
+replace them with the recorded source content
+```
+
+`--force` replaces them. A file barracks *never wrote* is refused outright and `--force`
+does not apply to it: force means "discard my edits to barracks' files", never "delete a
+file barracks has no record of".
+
+With no loadout named, every garrison `barracks.lock` records is materialised again from the
+lockfile alone. That is the repair path, and it needs no loadout trained on the machine
+running it - the lockfile carries every source and commit it needs.
+
+### `barracks inspect`
+
+Verifies that the committed skill files in this repository are exactly what `barracks.lock`
+says they should be. It changes nothing, and exits non-zero on any mismatch, so it can gate
+a build.
+
+```bash
+barracks inspect
+```
+
+```
+frontend  3 skills, 5 files  [claude, cursor]  3 problems
+  ! .claude/skills/css/SKILL.md: missing
+  ! .claude/skills/react/SKILL.md: modified
+  ! .claude/skills/react/notes.md: not in the lockfile
+```
+
+`barracks.lock` records a digest per file, so a file edited by hand, dropped in a rebase,
+half-merged, or added inside a vendored skill directory is reported rather than silently
+accepted. `barracks garrison` is what puts a drifted checkout back.
+
+A note that the loadout is pinned somewhere newer than `barracks.lock` is **not** a
+mismatch - the files and the lockfile agree, which is exactly what a teammate cloning the
+repository should get. It means the committed pins are behind the loadout, and bringing them
+forward is a commit like any other.
+
 ### `barracks upgrade [<loadout>...]`
 
 Re-resolves each source's declared ref, fetches whatever it now points at, and
@@ -251,6 +330,34 @@ Old store entries are left behind after an upgrade. Disk is cheap, and deleting
 a commit something might still be pointing at is not a decision to make
 implicitly.
 
+**A garrisoned loadout is upgraded too**, and reported separately, because it is
+the one part of an upgrade somebody else will read:
+
+```
+frontend
+  github.com/owner/skills#main  940f8b38 -> f6183d1c
+    + hooks
+    ~ react
+committed here (barracks.lock)
+  frontend
+    github.com/owner/skills#main  940f8b38 -> f6183d1c
+    + .claude/skills/hooks/SKILL.md
+    + .claude/skills/react/SKILL.md
+    commit these files and barracks.lock together
+```
+
+The vendored files and `barracks.lock` are rewritten together onto the new pins,
+so the skill update becomes a reviewable diff instead of something that happens
+invisibly on each machine. That is the whole reason the committed tier exists.
+The comparison is against the lockfile rather than against whether a source moved
+in this run, so a garrison an earlier upgrade left behind is recognised and
+brought forward - and an upgrade with nothing to do leaves the repository clean.
+
+A vendored file you have edited stops it, exactly as `barracks garrison` would,
+and barracks names the command that overrides it. The loadout definition still
+moves forward, so the lockfile is the only thing left behind; `barracks inspect`
+reports that as a note until you run `barracks garrison <loadout> --force`.
+
 ### `barracks recall <loadout>`
 
 Removes a spawned loadout, leaving the repo exactly as it was.
@@ -268,6 +375,21 @@ Recall removes only the symlinks the spawn recorded, and only after confirming e
 still a symlink pointing into the barracks store. Anything else - a real file, a directory,
 a symlink you re-pointed - is left alone and reported.
 
+A garrisoned loadout is recalled by the same command, because it is deployed here just as
+much as a spawn is. Its committed files are removed only where they still match the digest
+`barracks.lock` recorded; a file edited since it was committed is kept and reported, and so
+is anything barracks never put there. A garrison is one committed unit with no per-target
+record, so `--target` and `--global` leave it alone rather than half-removing it.
+
+```
+recalled the frontend garrison (4 files removed, barracks.lock updated)
+! left in place: .claude/skills/react/reference.md - edited since it was committed - your change is kept
+! left in place: .claude/skills/react/handwritten.md - barracks has no record of putting it there
+```
+
+The removal is a change to tracked files, so it appears in `git status` for review like any
+other - and is recoverable with `git checkout` if it was not what you meant.
+
 ### `barracks deployed`
 
 Shows what is currently spawned here, which agent each one went into, and how each one
@@ -279,6 +401,11 @@ barracks deployed --target cursor
 barracks deployed --global       # your user-level skills directories
 barracks deployed --everywhere   # every live spawn on this machine
 ```
+
+Anything garrisoned here is listed too, marked `[committed]`, because it is deployed in this
+repository as much as a spawn is - more permanently, in fact. It is read from
+`barracks.lock` rather than from a lease, so `--everywhere` still only knows about the
+repository you are standing in: barracks keeps no machine-wide index of garrisons.
 
 ### `barracks list`
 
@@ -314,8 +441,43 @@ rules with no guessing. See [Choosing targets](#choosing-targets).
 ### Also available
 
 `barracks disband <name>` deletes a loadout definition, refusing while it is still
-deployed. `barracks targets` lists the agents barracks can deploy to and marks the ones
-this repository is already set up for.
+deployed or garrisoned here. `barracks targets` lists the agents barracks can deploy to and
+marks the ones this repository is already set up for.
+
+---
+
+## Personal or shared
+
+There are two ways to put a loadout in a repository, and they are for different jobs.
+
+|  | `barracks spawn` | `barracks garrison` |
+|---|---|---|
+| What lands on disk | Symlinks into your store | Real file content |
+| In git | Excluded via `.git/info/exclude` | **Committed**, with `barracks.lock` |
+| Survives a clone | No | Yes |
+| Needs barracks to use | Yes | **No** |
+| Who gets it | You, on this machine | Everyone who clones |
+| Lifetime | A lease: `manual`, `--for`, or `barracks run` | Until someone recalls it, in a commit |
+| Reaped automatically | Yes, when the lease ends | **Never** - it has no lease |
+| Disk cost | One copy per machine | One copy per repository |
+| `barracks upgrade` | Relinks it in place | Rewrites the files and `barracks.lock` |
+| Updating | Happens on each machine | A reviewable diff in a pull request |
+
+**Spawn** when the skill set is your own preference: a set you like in every repo you touch,
+a throwaway session, an experiment. Nobody else has to agree with you, and nothing appears
+in anyone's diff.
+
+**Garrison** when the skill set belongs to the repository: the review checklist this codebase
+expects, the house conventions, the skills every agent working here should have. Everyone
+gets the same skills at the same commits, a new joiner needs nothing installed, and changing
+the set is a pull request somebody reviews.
+
+The two never share a path. Garrisoning over a personal spawn is refused, and so is spawning
+onto committed paths - a path registered both ways would either hide the committed files from
+the team or leave every checkout dirty forever. Recall one first; the error says which.
+
+Different loadouts in one repository are fine, and so is spawning your own loadout beside a
+garrisoned one, as long as they do not want the same skill name in the same agent directory.
 
 ---
 
@@ -353,6 +515,14 @@ restores the file byte for byte - and only deletes the file if barracks was what
 it. Outside a git repository barracks still spawns into the working directory; it just
 says there was no exclude file to register in.
 
+**Garrisoning is the exact opposite, deliberately.** It writes real file content and
+registers nothing in `.git/info/exclude`, because a committed skill set that git ignores is
+worthless: the install would look perfect and the commit would carry nothing. barracks checks
+for that and warns if a `.gitignore` rule would swallow the files. A garrison never takes a
+lease out, so no lifetime governs it and no reaper pass can reach it - `barracks.lock` in the
+repository is the whole record, and it travels with the repository rather than with the
+machine.
+
 **Lifetimes are governed by leases.** A spawn writes a record describing exactly what it
 created and when it should end:
 
@@ -373,6 +543,11 @@ resolving into the barracks store. Your own `.claude/skills/my-skill/` is safe, 
 barracks finds one of its paths taken over it says so rather than failing silently.
 Upgrading applies the same check before it repoints or removes anything.
 
+The committed tier obeys the same rule with a different proof. A symlink can be checked by
+where it points; a vendored file cannot, so `barracks.lock` records a digest for each one and
+that digest is the proof. A file whose content still matches is barracks' own and may be
+removed. Anything else - edited, replaced, or never recorded at all - is kept and reported.
+
 ### On-disk layout
 
 ```
@@ -380,7 +555,16 @@ Upgrading applies the same check before it repoints or removes anything.
 ├── loadouts/       # one hand-editable YAML file per loadout
 ├── store/          # <host>/<owner>/<repo>@<commit>/ - fetched once, shared by everything
 ├── mirrors/        # bare git mirrors, so a repo is cloned at most once
-└── leases/         # one record per live spawn
+└── leases/         # one record per live spawn - never for a garrison
+```
+
+A garrison keeps nothing here. Its record is `barracks.lock`, committed at the root of the
+repository it belongs to:
+
+```
+your-repo/
+├── barracks.lock       # generated: sources, commits, and a digest per vendored file
+└── .claude/skills/     # real, committed skill directories
 ```
 
 `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are honoured when set; `BARRACKS_HOME` overrides
@@ -392,7 +576,7 @@ everything.
 
 A target is one agent's skills directory. Every supported agent reads the same artifact
 barracks produces - a directory containing a `SKILL.md` - so nothing is translated or
-rewritten on the way in.
+rewritten on the way in, and the same table serves both a personal spawn and a garrison.
 
 | Target | In a repo | Global | Read by |
 |---|---|---|---|
@@ -432,6 +616,11 @@ by hand. At spawn time barracks takes the first of these that applies:
    `.claude/`, and so on). A global spawn looks at the matching directory in your home
    instead.
 4. The default target, `claude`.
+
+`barracks garrison` follows the same order, with one addition between 2 and 3: a loadout this
+repository has already garrisoned keeps the agents `barracks.lock` records for it. An update
+must never quietly stop installing into an agent the repository has committed files for, and
+it says which agents it is reusing and why.
 
 When barracks decides for you - case 3 or 4 - it says so before it spawns, so a spawn never
 lands somewhere unexpected in silence.
@@ -562,8 +751,8 @@ produce, minus the upload.
 
 ## Not built yet
 
-The committed/shared tier with a lockfile and store garbage collection are separately
-queued.
+Store garbage collection is separately queued. `barracks upgrade` and the committed/shared
+tier with a lockfile both landed.
 
 ---
 

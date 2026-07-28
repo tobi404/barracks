@@ -40,7 +40,14 @@ command runs. Recall it and the repo is exactly as you found it.
 
 Skills are fetched once into a shared store and spawned as symlinks, so every
 repo on your machine shares one copy. Nothing barracks did not create is ever
-removed, and spawning leaves git status clean.`),
+removed, and spawning leaves git status clean.
+
+For a team repository, garrison a loadout instead: real files plus a committed
+barracks.lock, so everyone who clones gets the identical skills at the identical
+versions with no barracks installed.
+
+  barracks garrison frontend
+  barracks inspect`),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
@@ -58,6 +65,8 @@ removed, and spawning leaves git status clean.`),
 		newListCmd(env),
 		newSpawnCmd(env),
 		newUpgradeCmd(env),
+		newGarrisonCmd(env),
+		newInspectCmd(env),
 		newRecallCmd(env),
 		newDeployedCmd(env),
 		newRunCmd(env),
