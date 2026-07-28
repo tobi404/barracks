@@ -18,6 +18,7 @@ import (
 	"github.com/tobi404/barracks/internal/loadout"
 	"github.com/tobi404/barracks/internal/paths"
 	"github.com/tobi404/barracks/internal/proc"
+	"github.com/tobi404/barracks/internal/progress"
 	"github.com/tobi404/barracks/internal/spawn"
 	"github.com/tobi404/barracks/internal/store"
 	"github.com/tobi404/barracks/internal/voice"
@@ -40,9 +41,21 @@ type Env struct {
 	// Tty means "not a terminal", so a test sees no flavor unless it asks for
 	// it deliberately.
 	Tty func() bool
+	// ErrTty reports whether stderr is a terminal, and is what decides whether
+	// the progress indicator may use escape sequences.
+	//
+	// It is a second question rather than the same one because the two answers
+	// genuinely differ: `barracks equip ... > report.txt` leaves a user watching
+	// stderr who should still see the spinner, and `barracks equip ... 2> log`
+	// leaves a file that must never receive an escape code. Each stream is
+	// judged by what it is attached to. A nil ErrTty means "not a terminal".
+	ErrTty func() bool
 	// Rand picks between a step's interchangeable flavor lines. Tests set it to
 	// make the choice deterministic.
 	Rand func() uint64
+	// ProgressAfter overrides how long an operation must run before it is
+	// announced. Zero means progress.RevealAfter. Only tests set it.
+	ProgressAfter time.Duration
 
 	loadouts  *loadout.Store
 	leases    *lease.Store
@@ -52,6 +65,7 @@ type Env struct {
 	speaker   *voice.Speaker
 	place     string
 	preview   bool
+	quiet     bool
 }
 
 func (e *Env) now() time.Time {
@@ -68,6 +82,11 @@ func (e *Env) init() error {
 	e.loadouts = loadout.NewStore(e.Layout.LoadoutsDir())
 	e.leases = lease.NewStore(e.Layout.LeasesDir())
 	e.store = store.New(e.Layout.StoreDir(), e.Layout.MirrorsDir(), e.Git)
+	e.store.Progress = e.newProgress()
+	// Where git configuration is read from when the display has to decide
+	// whether a credential helper could reach the terminal: the directory the
+	// user is standing in, so this repository's local scope counts too.
+	e.store.Workdir = e.Cwd
 	e.engine = &spawn.Engine{
 		Store:  e.store,
 		Leases: e.leases,
@@ -102,7 +121,7 @@ func (e *Env) init() error {
 // impossible for it to reach anything that is reading barracks rather than
 // watching it.
 func (e *Env) speak(command, subject string) {
-	if e.speaker == nil || e.preview || !e.isTerminal() || e.voiceOffByEnv() {
+	if e.speaker == nil || e.quiet || e.preview || !e.isTerminal() || e.voiceOffByEnv() {
 		return
 	}
 	line := e.speaker.Line(command, subject, e.place)
@@ -116,6 +135,29 @@ func (e *Env) speak(command, subject string) {
 
 func (e *Env) isTerminal() bool {
 	return e.Tty != nil && e.Tty()
+}
+
+func (e *Env) errIsTerminal() bool {
+	return e.ErrTty != nil && e.ErrTty()
+}
+
+// newProgress builds the reporter slow operations announce themselves to, and
+// is the one place every reason to stay quiet about them is gathered - the
+// counterpart of speak, and for the same reason: progress is decoration on
+// stderr, so it must be impossible for it to reach anything reading barracks
+// rather than watching it.
+//
+// A nil reporter is total silence; Live false is silence about escape sequences
+// only, and still prints the plain lines that make a redirected run readable.
+func (e *Env) newProgress() *progress.Reporter {
+	if e.Err == nil || e.quiet || e.voiceOffByEnv() {
+		return nil
+	}
+	return &progress.Reporter{
+		W:      e.Err,
+		Live:   e.errIsTerminal(),
+		Reveal: e.ProgressAfter,
+	}
 }
 
 // previews marks this invocation as one that by design changes nothing, so it
@@ -161,8 +203,15 @@ func (e *Env) noteScope(ctx context.Context, global bool) {
 	}
 }
 
-// EnvQuiet turns the flavor line off permanently, for anyone who wants it gone
-// rather than gone-for-this-invocation.
+// EnvQuiet turns everything barracks says about itself off permanently, for
+// anyone who wants it gone rather than gone-for-this-invocation: the flavor line
+// and the progress indicator both.
+//
+// One switch rather than two, because `--quiet` is already one switch for both
+// and the variable is documented as the standing form of that flag. A variable
+// spelled QUIET that left a spinner turning would be the surprising reading of
+// the two, and a second variable would mean the flag and the variable no longer
+// meant the same thing.
 const EnvQuiet = "BARRACKS_QUIET"
 
 func (e *Env) voiceOffByEnv() bool {

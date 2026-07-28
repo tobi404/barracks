@@ -11,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/tobi404/barracks/internal/gitcmd"
+	"github.com/tobi404/barracks/internal/progress"
 	"github.com/tobi404/barracks/internal/source"
 )
 
@@ -21,6 +23,25 @@ type Store struct {
 	Root    string
 	Mirrors string
 	Git     gitcmd.Git
+
+	// Progress is where the slow half of barracks announces itself. Every
+	// command that can sit waiting - equip, upgrade, and the first spawn,
+	// garrison or run that has to populate the store rather than reuse it -
+	// reaches the network through this package and nowhere else, which is why
+	// one reporter here covers all of them. A nil reporter is silent.
+	Progress *progress.Reporter
+
+	// Workdir is where git configuration is read from when the display needs to
+	// know whether a credential helper could reach the terminal, so a
+	// repository's local scope is seen alongside the global and system ones.
+	// Empty means the process's own working directory.
+	Workdir string
+
+	// The one credential-helper read a run makes. See
+	// credentialHelpersStaySilent; unset means "not known to stay silent",
+	// which is the safe answer for a read that never happened or failed.
+	helpersOnce   sync.Once
+	helpersSilent bool
 }
 
 // New builds a Store over the given roots.
@@ -45,7 +66,14 @@ func (s *Store) Resolve(ctx context.Context, src source.Source) (string, error) 
 	if source.IsFullSHA(src.Ref) {
 		return src.Ref, nil
 	}
-	return s.Git.ResolveRef(ctx, src.CloneURL, src.Ref)
+	step := s.step(ctx, src, "resolving")
+	defer step.Fail() // no-op once Done has run; the guarantee is on the panic path
+	commit, err := s.Git.ResolveRef(ctx, src.CloneURL, src.Ref)
+	if err != nil {
+		return "", err
+	}
+	step.Done("resolved " + short(commit))
+	return commit, nil
 }
 
 // Ensure materialises the source at commit and returns its directory.
@@ -64,6 +92,12 @@ func (s *Store) Ensure(ctx context.Context, src source.Source, commit string) (d
 	if s.Has(src, commit) {
 		return dir, false, nil
 	}
+
+	// Everything past here is the slow half: a network fetch, then unpacking a
+	// tree. The early return above is why a warm store stays silent - it never
+	// gets as far as announcing anything.
+	step := s.step(ctx, src, "fetching")
+	defer step.Fail() // no-op once Done has run; restores the terminal on every other path
 
 	mirror := filepath.Join(s.Mirrors, src.MirrorKey())
 	if !s.Git.HasCommit(ctx, mirror, commit) {
@@ -87,16 +121,42 @@ func (s *Store) Ensure(ctx context.Context, src source.Source, commit string) (d
 	}
 	defer os.RemoveAll(tmp)
 
+	step.Phase("unpacking")
 	if err := s.Git.ExportTree(ctx, mirror, commit, tmp); err != nil {
 		return "", false, fmt.Errorf("export %s@%s: %w", src.Ident(), short(commit), err)
 	}
 	if err := os.Rename(tmp, dir); err != nil {
 		if s.Has(src, commit) { // lost a race with a concurrent barracks; fine.
+			step.Done("already in the store")
 			return dir, false, nil
 		}
 		return "", false, fmt.Errorf("install %s: %w", src.Ident(), err)
 	}
+	step.Done("fetched " + short(commit))
 	return dir, true, nil
+}
+
+// step announces work on src.
+//
+// The subject is the repository alone: one mirror serves every ref of it, so
+// that is the thing actually being fetched, and it is short enough to leave the
+// phase and the summary room on the line.
+//
+// Resolve and Ensure announce separately rather than sharing one line for the
+// source. Merging them would mean holding a completed line back until something
+// later decided nothing else was coming, and every caller would then owe the
+// display a flush before printing its own report. Separate steps cost a second
+// line only when resolving and fetching were each slow enough to be announced -
+// and when that happens, "resolving took 30s of this" is worth saying.
+func (s *Store) step(ctx context.Context, src source.Source, phase string) *progress.Step {
+	work := progress.Work{Subject: src.RepoKey(), Phase: phase}
+	// Only an animated display can paint over somebody, and answering this can
+	// cost a git subprocess - so a run that is not animating anyway (redirected,
+	// quiet, in CI) neither needs the answer nor pays for it.
+	if s.Progress.Animates() {
+		work.SharesTerminal = s.sharesTerminal(ctx, src.CloneURL)
+	}
+	return s.Progress.Step(work)
 }
 
 // Locate reads a store path back: given a source, it reports which commit of

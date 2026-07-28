@@ -31,6 +31,7 @@ barracks run frontend -- claude                            # or just for one ses
 | Check a checkout matches what was committed | [`barracks inspect`](#barracks-inspect) |
 | Understand source syntax | [Source syntax](#source-syntax) |
 | Know what it touches on disk | [What it does to your repo](#what-it-does-to-your-repo) |
+| Work out why a command is slow | [Progress](#progress) |
 | Turn off the line it signs off with | [Voice](#voice) |
 | See which agents are supported | [Targets](#targets) |
 | Choose which agents a loadout installs into | [Choosing targets](#choosing-targets) |
@@ -447,6 +448,48 @@ marks the ones this repository is already set up for.
 
 ---
 
+## Progress
+
+Fetching a source can take a while, and a blinking cursor cannot tell you whether barracks
+is working, stuck, or waiting for a passphrase. So anything that has to reach the network -
+`equip`, `upgrade`, and the first `spawn`, `garrison` or `run` that has to populate the
+store rather than reuse it - says what it is doing while it does it.
+
+```
+✓ github.com/obra/superpowers    resolved 7b2e4d1  3s
+⠹ github.com/big/monorepo        fetching… 24s
+```
+
+Completed steps stay put and scroll away with everything else; only the current line spins.
+After a genuinely long wait it adds one line naming the likely causes, so a hang turns into
+something you can act on:
+
+```
+  (large repository, slow network, or git waiting on credentials)
+⠹ github.com/big/monorepo        fetching… 24s
+```
+
+Like the voice, it is decoration and keeps out of the way:
+
+- **Nothing appears for the first fraction of a second**, so a warm store still looks
+  instant - because it is.
+- **Only on stderr**, so stdout carries nothing but the report.
+- **Escape sequences only on a terminal.** Redirect stderr or run in CI and you get the same
+  lines as plain text with no spinner and no cursor tricks, because an escape code in a log
+  file is corruption.
+- **It never takes the terminal from git.** Anything that might ask you a question gets the
+  terminal to itself: fetching over SSH is not animated at all, and neither is a fetch where
+  git is configured with a credential helper barracks cannot show is silent. A passphrase,
+  host-key or credential prompt stays readable and answerable - those are written straight to
+  your terminal, and nothing here will paint over them. You still get every line, just
+  without the spinner.
+- **The cursor always comes back**, on success, on failure, and on Ctrl-C.
+
+`--quiet` (`-q`) and `BARRACKS_QUIET=1` turn it off along with the voice. One switch for
+both: the flag has always meant both, and the variable is just the standing form of it.
+
+---
+
 ## Voice
 
 `train`, `equip`, `spawn`, `recall`, `upgrade`, `garrison` and `run` each sign off with one
@@ -473,6 +516,7 @@ It is decoration, so it keeps out of the way of everything that matters:
   `upgrade --dry-run`, which also leaves the unit as fresh as it found it.
 
 Turn it off for one command with `--quiet` (`-q`), or for good with `BARRACKS_QUIET=1`.
+Both also turn off the [progress indicator](#progress).
 
 ---
 

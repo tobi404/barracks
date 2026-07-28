@@ -34,6 +34,14 @@ type harness struct {
 	// by default, which is why the rest of the suite never sees a flavor line -
 	// exactly as a pipe or a CI runner would not. See voice_test.go.
 	tty bool
+	// errTty forces the same condition for stderr, which is what the progress
+	// indicator is gated on. See progress_test.go.
+	errTty bool
+	// progressAfter is how long an operation must run before progress announces
+	// it. newHarness sets it far beyond any test's runtime, so the rest of the
+	// suite sees nothing however loaded the machine running it is; the progress
+	// tests turn it down deliberately.
+	progressAfter time.Duration
 	// rnd makes the choice between a step's interchangeable lines
 	// deterministic. Nil leaves the real source in place.
 	rnd func() uint64
@@ -83,6 +91,8 @@ func newHarness(t *testing.T, skills ...testutil.Skill) *harness {
 		prober: &stubProber{alive: map[int]string{}, unknowable: map[int]bool{}},
 		env:    map[string]string{},
 		home:   filepath.Join(root, "home"),
+
+		progressAfter: time.Hour,
 	}
 	testutil.WriteFile(t, filepath.Join(h.work.Dir, "README.md"), "hello\n")
 	h.work.Commit(t, "initial")
@@ -104,7 +114,10 @@ func (h *harness) run(args ...string) (string, string, error) {
 		Getenv: func(k string) string { return h.env[k] },
 		Home:   func() (string, error) { return h.home, nil },
 		Tty:    func() bool { return h.tty },
+		ErrTty: func() bool { return h.errTty },
 		Rand:   h.rnd,
+
+		ProgressAfter: h.progressAfter,
 	}
 	cmd := New(env)
 	cmd.SetArgs(args)

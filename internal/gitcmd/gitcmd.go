@@ -47,6 +47,38 @@ func (g Git) Run(ctx context.Context, dir string, args ...string) (string, error
 	return strings.TrimSpace(out.String()), nil
 }
 
+// ConfigMatching returns the value of every configuration key whose name
+// matches pattern, across all the scopes git itself would consult from dir -
+// system, global, and the local scope of whatever repository dir sits in.
+//
+// Nothing matching is not a failure. `git config --get-regexp` exits 1 with no
+// output to say a key is unset, which is a fact about the configuration rather
+// than a problem reading it, so it comes back as no values and no error. Only a
+// genuine failure - no git on PATH, an unparsable config file - is an error.
+// A caller that treats the two alike would read "nothing is configured" as
+// "I could not find out", which for most settings is the opposite conclusion.
+func (g Git) ConfigMatching(ctx context.Context, dir, pattern string) ([]string, error) {
+	out, err := g.Run(ctx, dir, "config", "--get-regexp", pattern)
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 && strings.TrimSpace(out) == "" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var values []string
+	for _, line := range strings.Split(out, "\n") {
+		// Each line is "key value"; a key set to the empty string prints as the
+		// key alone, so a line with no separator is a value of "".
+		_, value, _ := strings.Cut(line, " ")
+		values = append(values, value)
+	}
+	return values, nil
+}
+
 // RepoRoot returns the work-tree root containing dir.
 func (g Git) RepoRoot(ctx context.Context, dir string) (string, error) {
 	out, err := g.Run(ctx, dir, "rev-parse", "--show-toplevel")

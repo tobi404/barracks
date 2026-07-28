@@ -233,7 +233,7 @@ deliberate decision, not a refactor.
   by `upgrade --dry-run`) rather than being recognised by flag name: silencing a preview that
   still counted would answer the first real change with the wearier line. It is not a "did
   anything change" rule - an upgrade that finds every source current did the work and speaks.
-  It writes to stderr only, only when stdout is a character device (`cli.stdoutIsTerminal`),
+  It writes to stderr only, only when stdout is a character device (`cli.isTerminal`),
   and only from cobra's `PersistentPostRun`, which cobra skips once `RunE` has returned an
   error: that is what makes "never on a failure" structural. Nothing about the escalation
   state may affect anything but which string is printed. **An escalated line may only express
@@ -248,6 +248,41 @@ deliberate decision, not a refactor.
   passing suite is not proved at all. Lines must be **original** - this is a public repo, so
   no verbatim Blizzard dialogue - and `voice.TestLinesMeetTheHouseStyle` holds the rest of
   the bar.
+- **The progress indicator writes escape sequences only where escape sequences are safe, and
+  always gives the terminal back.** `internal/progress` owns the display; `cli.Env.newProgress`
+  is where every reason to stay quiet about it is gathered, exactly as `speak` is for the
+  voice. Three rules are structural, not stylistic. (1) `Reporter.Live` gates *every* escape
+  sequence, and it is set from `Env.ErrTty` - **stderr**, not stdout, because that is the
+  stream being written to; a run with stderr redirected must produce a file that is plain
+  text. (2) Hiding the cursor and arming the signal handler happen in one place under one
+  lock (`Step.tick`), and the handler restores, calls `signal.Reset`, then re-raises, so
+  barracks still dies of the signal with the status it always had. A process that exits with
+  the cursor hidden leaves the user typing blind. (3) **Nothing whose child might reach the
+  terminal is ever animated.** That is one rule, and `store.sharesTerminal` is the one place
+  it is asked; SSH and credential helpers are two instances of it, not two special cases.
+  `gitcmd` captures git's streams and sets `GIT_TERMINAL_PROMPT=0`, so git itself can neither
+  read the terminal nor write to it - which is exactly why the two programs that ignore that
+  variable have to be handled separately: `ssh` opens `/dev/tty` itself for a passphrase or a
+  host-key confirmation, and a credential helper is a separate process free to do the same
+  (Git Credential Manager prompts on the terminal and answers to its own `GCM_INTERACTIVE`).
+  So an SSH source is never animated, and an http/https/git:// one only when every configured
+  `credential.helper` is on the verified allowlist in `internal/store/terminal.go` *and* the
+  configuration was readable; anything else runs in the same append-only mode as a redirected
+  stream. The asymmetry is the whole argument: being over-cautious costs a user only the
+  animation, being under-cautious costs them a prompt erased ten times a second at the moment
+  they are most stuck. Add to that allowlist only with the same evidence the entries carry,
+  never from memory. A local source stays animated unconditionally - git consults no helper
+  for a path on disk. The read is one `git config --get-regexp` per run, cached and lazy, and
+  exit status 1 with no output means *no helper is configured* (safe, still animated), never
+  "unreadable". The only slow work barracks does goes
+  through `store.Resolve`/`store.Ensure`, which is why one reporter on `*store.Store` covers
+  `equip`, `upgrade`, `spawn`, `garrison` and `run`; a new slow path must announce itself
+  there or grow its own step. Thresholds are named constants in `internal/progress` and
+  nowhere else. Like the voice, this is invisible to an ordinary test: `internal/cli/progress_test.go`
+  forces `Env.ErrTty` and winds `Env.ProgressAfter` down, and `progress.TestASignalRestoresTheTerminalAndStillKills`
+  drives a real child process because the signal path cannot be asserted in-process. Prove a
+  change on a real pty (`script -q`, `expect`) as well - the suite cannot see a line that
+  wraps or a prompt that gets overwritten.
 
 ## Sharp edges
 
