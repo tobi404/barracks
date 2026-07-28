@@ -8,6 +8,15 @@ LDFLAGS   := -X $(STAMP).Version=$(VERSION) -X $(STAMP).Commit=$(COMMIT) -X $(ST
 COVER_MIN ?= 80.0
 LINT_VER  := $(shell cat .golangci-lint-version)
 GORL_VER  := $(shell cat .goreleaser-version)
+# How the release targets reach GoReleaser. `go run` bootstraps it from source,
+# which needs a Go toolchain at least as new as GoReleaser's own go directive -
+# far newer than the version this module compiles against, and newer than a
+# developer's Go is likely to be. That only works because GOTOOLCHAIN defaults
+# to auto locally and silently fetches one. CI pins GOTOOLCHAIN=local, so it
+# installs the pinned release binary instead and passes it in as
+# `make release-check GORELEASER=goreleaser`. Either way the version is the one
+# .goreleaser-version names.
+GORELEASER ?= go run github.com/goreleaser/goreleaser/v2@$(GORL_VER)
 
 .PHONY: build install test cover cover-check lint fmt-check vet golangci fmt clean \
 	release-check release-snapshot
@@ -64,25 +73,31 @@ fmt-check:
 vet:
 	go vet ./...
 
-# The linter CI runs, at the version CI pins.
+# The linter CI runs, at the version CI pins. CI invokes it through
+# golangci-lint-action, which installs a binary; this target bootstraps the same
+# version with `go run` and so carries the same toolchain caveat as
+# $(GORELEASER) above - override GOLANGCI with an installed binary to run it
+# under GOTOOLCHAIN=local.
+GOLANGCI ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(LINT_VER)
+
 golangci:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(LINT_VER) run ./...
+	$(GOLANGCI) run ./...
 
 fmt:
 	gofmt -w .
 
 # Release packaging, at the version .goreleaser-version pins. The release
-# workflow runs the same targets, so a config error is caught here rather than
+# workflow runs the same target, so a config error is caught here rather than
 # on a tag.
 release-check:
-	go run github.com/goreleaser/goreleaser/v2@$(GORL_VER) check
+	$(GORELEASER) check
 
 # Everything a real release does - every platform, archives, checksums, and the
 # Homebrew cask - written to dist/ and published nowhere. HOMEBREW_TAP_GITHUB_TOKEN
 # is only read when publishing, so a dummy value is enough to render the cask.
 release-snapshot:
 	HOMEBREW_TAP_GITHUB_TOKEN=$${HOMEBREW_TAP_GITHUB_TOKEN:-snapshot-not-a-real-token} \
-		go run github.com/goreleaser/goreleaser/v2@$(GORL_VER) release \
+		$(GORELEASER) release \
 		--snapshot --clean --skip=publish,announce,validate
 
 clean:

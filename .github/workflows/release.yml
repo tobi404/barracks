@@ -68,6 +68,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The Go the shipped binaries are compiled with: the one go.mod declares,
+      # exactly as ci.yml tests against. setup-go also pins GOTOOLCHAIN=local so
+      # nothing can silently switch it - which is why GoReleaser itself is
+      # installed as a binary below rather than bootstrapped with `go run`.
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -77,21 +81,32 @@ jobs:
       - name: test and coverage
         run: make cover-check
 
-      # Catches an invalid or deprecated .goreleaser.yaml before any release
-      # exists, which `goreleaser release` on its own would only warn about.
-      - name: check the release config
-        run: make release-check
-
       # .goreleaser-version is the only place the GoReleaser version is written;
       # the Makefile reads the same file.
       - name: read the pinned GoReleaser version
         id: goreleaser
         run: echo "version=$(cat .goreleaser-version)" >> "$GITHUB_OUTPUT"
 
+      # Install only, and before the config check: both steps below need the
+      # tool, and it has to arrive as a released binary. `go run` would build it
+      # from source, and GoReleaser's go directive is far newer than the version
+      # this module compiles against - under GOTOOLCHAIN=local that can only
+      # fail. It is the tool's own build requirement, never the language version
+      # barracks is compiled with, so go.mod stays where it is.
       - uses: goreleaser/goreleaser-action@v7.2.3
         with:
           version: ${{ steps.goreleaser.outputs.version }}
-          args: release --clean
+          install-only: true
+
+      # Catches an invalid or deprecated .goreleaser.yaml before any release
+      # exists, which `goreleaser release` on its own would only warn about.
+      # Same Makefile target `make release-check` runs locally; GORELEASER
+      # points it at the binary just installed instead of `go run`.
+      - name: check the release config
+        run: make release-check GORELEASER=goreleaser
+
+      - name: build, package and publish
+        run: goreleaser release --clean
         env:
           # Creates the release, uploads the archives and checksums.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

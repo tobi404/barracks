@@ -54,6 +54,23 @@ is written, read by both `make release-check`/`make release-snapshot` and the wo
   every archive, the checksums, and `dist/homebrew/Casks/barracks.rb` without publishing.
   A tag is not a test fixture: Homebrew and `checksums.txt` both pin to it, so a pushed
   tag can never be moved or reused.
+- **A local release run proves less than it looks, because `GOTOOLCHAIN` differs.** The
+  release targets reach GoReleaser through `$(GORELEASER)`, which defaults to
+  `go run ...@$(GORL_VER)` - a *source* build whose Go requirement tracks GoReleaser's own
+  go directive, always far ahead of what this module compiles against. Locally
+  `GOTOOLCHAIN=auto` silently fetches whatever that is, so the target passes on any
+  machine. `actions/setup-go` pins `GOTOOLCHAIN=local`, where the same command can only
+  fail - which is exactly how `v0.1.0` died at `make release-check` having published
+  nothing. So the workflow installs the pinned GoReleaser *binary*
+  (`goreleaser-action` with `install-only: true`) and calls
+  `make release-check GORELEASER=goreleaser`; the target stays the single owner of the
+  command. Reproduce a release step honestly by prefixing `GOTOOLCHAIN=local` and passing
+  a real binary in - a bare `make release-check` cannot see this class of failure.
+- **The tool's Go and the module's Go are separate concerns.** `setup-go` reads
+  `go-version-file: go.mod`, and that Go is what compiles the shipped binaries (`go version
+  -m` on a release binary reports it). Never raise `go.mod` to satisfy GoReleaser, golangci-lint,
+  or any other tool: that raises the floor for everyone importing the module for a reason
+  that has nothing to do with them. Install the tool as a binary instead.
 - **The binaries reproduce; the archives do not.** `-trimpath`, `CGO_ENABLED=0` and
   `mod_timestamp: {{ .CommitTimestamp }}` make two builds of one tag produce bit-identical
   binaries (verified by diffing their hashes across three runs). The `.tar.gz` around them
