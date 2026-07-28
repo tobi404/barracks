@@ -70,7 +70,11 @@ is written, read by both `make release-check`/`make release-snapshot` and the wo
   clearing `com.apple.quarantine` from both unsigned binaries. `skip_upload` must stay the
   quoted literal `"auto"` - GoReleaser skips the cask push for a prerelease tag on that
   exact string and nothing else, so `true`, an unquoted `auto`, or an empty field all end
-  up handing a release candidate to every `brew install`.
+  up handing a release candidate to every `brew install`. `release.footer` branches on
+  `{{ if .Prerelease }}` for the same reason: a prerelease's notes must not print the
+  `brew install` line the tap will not serve. `goreleaser check` does not render
+  templates, so a footer change is only proved by reading the notes a tagged dry run
+  produces in a throwaway clone.
 
 ## Invariants that must not be broken
 

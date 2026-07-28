@@ -83,12 +83,19 @@ release:
   # A tag with a prerelease suffix (v1.2.0-rc.1) is published as a prerelease;
   # a plain tag is not.
   prerelease: auto
+  # `.Prerelease` is the tag's suffix, empty for a stable tag. The cask is not
+  # pushed for a prerelease (see skip_upload below), so advertising
+  # `brew install` on a release candidate's page would hand the reader the
+  # previous stable build instead of the one they came to try.
   footer: |
     ## Install
 
-    ```bash
+    {{ if .Prerelease }}This is a prerelease, so the Homebrew tap is deliberately not
+    updated for it: `brew install tobi404/tap/barracks` still serves the latest stable
+    version. To try this build, download the archive for your platform from the assets
+    above and check it against `checksums.txt`.{{ else }}```bash
     brew install tobi404/tap/barracks
-    ```
+    ```{{ end }}
 
 # A cask, not a formula: GoReleaser deprecated `brews` in favour of
 # `homebrew_casks` and `goreleaser check` fails on the old key. Casks are macOS

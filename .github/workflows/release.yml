@@ -49,8 +49,11 @@ jobs:
             echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN is not set, so the Homebrew cask cannot be published to $TAP. No release was created. $fix"
             exit 1
           fi
-          if ! answer=$(GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" gh api "repos/$TAP" --jq .permissions.push 2>&1); then
-            echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN is set but cannot reach $TAP - it is expired, revoked, or scoped to another repository - so the Homebrew cask cannot be published. No release was created. GitHub said: $(printf '%s' "$answer" | tr '\n' ' '). $fix"
+          # gh's stderr goes to a file rather than into `answer`: a diagnostic it
+          # prints while still exiting 0 would otherwise be concatenated ahead of
+          # the permission and fail a token that is in fact fine.
+          if ! answer=$(GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" gh api "repos/$TAP" --jq .permissions.push 2>"$RUNNER_TEMP/tap-token.err"); then
+            echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN is set but cannot reach $TAP - it is expired, revoked, or scoped to another repository - so the Homebrew cask cannot be published. No release was created. GitHub said: $(tr '\n' ' ' <"$RUNNER_TEMP/tap-token.err"). $fix"
             exit 1
           fi
           if [ "$answer" != "true" ]; then
