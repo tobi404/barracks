@@ -1,7 +1,7 @@
 # Release packaging for barracks.
 #
 # Run it locally with `make release-check` (validate) and `make release-snapshot`
-# (build every platform, archive, checksum, and render the Homebrew formula into
+# (build every platform, archive, checksum, and render the Homebrew cask into
 # dist/ without publishing anything). The release workflow runs the same binary
 # at the version pinned in .goreleaser-version - that file is the only place the
 # version is written.
@@ -111,7 +111,7 @@ homebrew_casks:
       # Pushing to a second repository needs a token the workflow's default
       # GITHUB_TOKEN cannot be. .github/workflows/release.yml refuses to start
       # when this secret is missing, rather than publishing a release whose
-      # formula never lands.
+      # cask never lands.
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     # The literal string "auto", quoted so YAML cannot turn it into a boolean:
     # GoReleaser skips the cask push only when the value is exactly that

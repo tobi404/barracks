@@ -78,8 +78,8 @@ release-check:
 	go run github.com/goreleaser/goreleaser/v2@$(GORL_VER) check
 
 # Everything a real release does - every platform, archives, checksums, and the
-# Homebrew formula - written to dist/ and published nowhere. HOMEBREW_TAP_GITHUB_TOKEN
-# is only read when publishing, so a dummy value is enough to render the formula.
+# Homebrew cask - written to dist/ and published nowhere. HOMEBREW_TAP_GITHUB_TOKEN
+# is only read when publishing, so a dummy value is enough to render the cask.
 release-snapshot:
 	HOMEBREW_TAP_GITHUB_TOKEN=$${HOMEBREW_TAP_GITHUB_TOKEN:-snapshot-not-a-real-token} \
 		go run github.com/goreleaser/goreleaser/v2@$(GORL_VER) release \
