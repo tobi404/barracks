@@ -538,8 +538,8 @@ repository is already set up for.
 
 Fetching a source can take a while, and a blinking cursor cannot tell you whether barracks
 is working, stuck, or waiting for a passphrase. So anything that has to reach the network -
-`equip`, `upgrade`, and the first `spawn`, `garrison` or `run` that has to populate the
-store rather than reuse it - says what it is doing while it does it.
+`equip`, `upgrade`, and the first `spawn`, `garrison`, `strip` or `run` that has to populate
+the store rather than reuse it - says what it is doing while it does it.
 
 ```
 ✓ github.com/obra/superpowers    resolved 7b2e4d1  3s
@@ -578,9 +578,9 @@ both: the flag has always meant both, and the variable is just the standing form
 
 ## Voice
 
-`train`, `equip`, `strip`, `spawn`, `recall`, `upgrade`, `garrison` and `run` each sign off with one
-short line from the unit that just took the order. Ask for the same thing again and again
-and it gets progressively more put-upon; leave it alone for a while and it greets you
+`train`, `equip`, `strip`, `spawn`, `recall`, `upgrade`, `garrison` and `run` each sign off
+with one short line from the unit that just took the order. Ask for the same thing again and
+again and it gets progressively more put-upon; leave it alone for a while and it greets you
 fresh. Asking somewhere else does not count as asking again: `spawn frontend` in a second
 repository is a first spawn there, and starts over.
 

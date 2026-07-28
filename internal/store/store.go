@@ -26,7 +26,7 @@ type Store struct {
 
 	// Progress is where the slow half of barracks announces itself. Every
 	// command that can sit waiting - equip, upgrade, and the first spawn,
-	// garrison or run that has to populate the store rather than reuse it -
+	// garrison, strip or run that has to populate the store rather than reuse it -
 	// reaches the network through this package and nowhere else, which is why
 	// one reporter here covers all of them. A nil reporter is silent.
 	Progress *progress.Reporter

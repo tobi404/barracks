@@ -324,8 +324,8 @@ deliberate decision, not a refactor.
   exit status 1 with no output means *no helper is configured* (safe, still animated), never
   "unreadable". The only slow work barracks does goes
   through `store.Resolve`/`store.Ensure`, which is why one reporter on `*store.Store` covers
-  `equip`, `upgrade`, `spawn`, `garrison` and `run`; a new slow path must announce itself
-  there or grow its own step. Thresholds are named constants in `internal/progress` and
+  `equip`, `upgrade`, `spawn`, `garrison`, `strip` and `run`; a new slow path must announce
+  itself there or grow its own step. Thresholds are named constants in `internal/progress` and
   nowhere else. Like the voice, this is invisible to an ordinary test: `internal/cli/progress_test.go`
   forces `Env.ErrTty` and winds `Env.ProgressAfter` down, and `progress.TestASignalRestoresTheTerminalAndStillKills`
   drives a real child process because the signal path cannot be asserted in-process. Prove a
