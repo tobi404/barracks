@@ -1,0 +1,68 @@
+name: CI
+
+# Verification for every change. Release packaging is deliberately not here - a
+# release workflow belongs in its own file next to this one.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A pull request groups by ref, so a newer push supersedes its running job. Any
+# other event keys the group on the commit sha, so its run shares a group with
+# nothing else and can neither cancel nor be cancelled by another run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Both operating systems, because internal/proc probes process liveness
+  # differently per OS and that code is what keeps a live session's skills from
+  # being deleted. Linux-only CI would leave the macOS path unverified.
+  test:
+    name: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: make fmt-check
+
+      - name: vet
+        run: make vet
+
+      - name: build
+        run: make build
+
+      - name: test and coverage
+        run: make cover-check
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # One OS is enough: internal/proc branches on runtime.GOOS rather than
+      # build tags, so every file is analysed on every platform.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version-file: .golangci-lint-version

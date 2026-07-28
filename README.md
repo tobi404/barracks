@@ -1,5 +1,7 @@
 # barracks
 
+[![CI](https://github.com/tobi404/barracks/actions/workflows/ci.yml/badge.svg)](https://github.com/tobi404/barracks/actions/workflows/ci.yml)
+
 Spawn agent skill loadouts into any repo - permanently, per project, or just for one session.
 
 There are thousands of agent skills published across git repos. You want one set for a
@@ -237,14 +239,25 @@ Adding another agent is a new entry in that table, not a code change.
 ## Development
 
 ```bash
-make build     # build both binaries into ./bin
-make test      # go test -race ./...
-make cover     # coverage report
-make lint      # gofmt check and go vet
+make build        # build both binaries into ./bin
+make test         # go test -race ./...
+make cover        # coverage report
+make cover-check  # coverage report, failing under 80%
+make lint         # gofmt check and go vet
+make fmt-check    # gofmt check on its own, exactly as CI runs it
+make fmt          # rewrite the tree with gofmt, what fmt-check tells you to run
+make vet          # go vet on its own, exactly as CI runs it
+make golangci     # the full linter suite, at the version CI pins
 ```
 
 Tests never touch the network: they build local git repository fixtures on disk and point
 sources at those paths.
+
+Every push to `main` and every pull request runs the same checks in GitHub Actions
+(`.github/workflows/ci.yml`): build, `go vet`, `gofmt`, `go test -race` with an 80%
+coverage floor, and `golangci-lint`. The test job runs on both Linux and macOS, because
+`internal/proc` decides whether a lease's owner is still alive differently per operating
+system. No secrets are needed to run it.
 
 ---
 

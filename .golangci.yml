@@ -1,0 +1,76 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck      # unchecked errors - the project's safety story depends on these
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - errorlint     # %w wrapping and errors.Is/As correctness
+    - misspell
+    - nilerr
+    - revive
+    - unconvert
+    - usestdlibvars
+    - wastedassign
+
+  # Deliberately not enabled:
+  #
+  # noctx - it wants exec.CommandContext everywhere. The three call sites here are
+  #   all cases where a context would be wrong: `barracks run` deliberately lets the
+  #   child process own its own lifetime (that is what a process lease means),
+  #   internal/proc shells out to ps/procfs synchronously, and internal/testutil
+  #   drives git fixtures in tests. Satisfying it would mean threading a cancel
+  #   channel through working logic to please a style rule.
+  # gochecknoglobals / gochecknoinits - cobra command wiring is package-level by design.
+  # lll / funlen / gocognit - size heuristics; review catches these better than a number.
+  # exhaustruct / wrapcheck / varnamelen - opinionated to the point of noise for this codebase.
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: waitgroup-by-value
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Tests deliberately ignore errors from setup helpers and cleanup.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

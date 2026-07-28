@@ -11,6 +11,22 @@ command surface; this file covers what a contributor needs that the code does no
 `make build` / `make test` / `make cover` / `make lint` - see `Makefile`. Two binaries ship
 from one program: `barracks` (root) and `brk` (`cmd/brk`).
 
+CI (`.github/workflows/ci.yml`) runs build, `make fmt-check`, `make vet`, and
+`make cover-check` on both `ubuntu-latest` and `macos-latest`, plus `golangci-lint` on
+Linux only. Every check lives in exactly one Makefile target that both CI and `make lint`
+invoke - never restate a check's command inline in the workflow. A make recipe runs under
+`/bin/sh` without `-e`, so a check target must capture the tool's exit status explicitly:
+`unformatted=$(gofmt -l .)` alone discards it and reports a clean tree when gofmt in fact
+could not parse a file or was missing entirely. `internal/buildcheck` runs the real
+`fmt-check` target against fixtures to keep that silent success from returning. The matrix is
+not decoration: `internal/proc` dispatches on `runtime.GOOS`, so Linux-only CI would leave
+the darwin liveness probe untested. `.golangci-lint-version` is the only place the linter
+version is written: `make golangci` reads it, and the action reads the same file through
+its `version-file` input - bump it there, never inline. `noctx` is disabled in
+`.golangci.yml` on purpose - the reasoning is written in the config, next to the setting.
+Coverage floor is 80% (`COVER_MIN` in the `Makefile`). Add release automation as a separate
+workflow file rather than extending this one.
+
 **Tests must never touch the network.** Build local git fixtures with
 `internal/testutil` (`NewSkillRepo` git-inits a temp dir with `SKILL.md` directories) and
 point sources at those paths. `internal/source` treats a filesystem path as a first-class
