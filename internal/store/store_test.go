@@ -259,6 +259,10 @@ func TestLocate(t *testing.T) {
 		{"outside the store", src, filepath.Join(root, "elsewhere"), "", "", false},
 		{"the store root", src, st.Root, "", "", false},
 		{"a repository name that merely shares a prefix", src, filepath.Join(st.Root, "github.com", "owner", "repository@"+commit), "", "", false},
+		// A path shaped like an entry but naming no commit identifies nothing.
+		// Returning "" as a commit would let an upgrade match a link to a source
+		// it cannot possibly have come from.
+		{"an entry with no commit", src, filepath.Join(st.Root, "github.com", "owner", "repo@"), "", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -127,6 +127,11 @@ func applyOp(op *Op, guard lease.StoreGuard) (*lease.Kept, error) {
 // plan hoped for. A link that failed to be created is not recorded, and one
 // that failed to be removed stays recorded so a later recall still knows about
 // it.
+//
+// It decides what to record and never what to remove, which is why the plain
+// identity answer of lease.SymlinkPointsAt is enough here. Nothing in this
+// function may grow into a mutation: those go through lease.InspectLink with
+// the store guard.
 func reconcileLinks(planned, original []lease.Link) []lease.Link {
 	byPath := map[string]lease.Link{}
 	for _, l := range original {
@@ -138,7 +143,7 @@ func reconcileLinks(planned, original []lease.Link) []lease.Link {
 	for _, want := range planned {
 		key := filepath.Clean(want.Path)
 		switch {
-		case pointsAt(want.Path, want.Target):
+		case lease.SymlinkPointsAt(want.Path, want.Target):
 			out = append(out, want)
 		case byPath[key].Path != "":
 			// The change did not land; the previous record is still the truth,
@@ -161,21 +166,6 @@ func reconcileLinks(planned, original []lease.Link) []lease.Link {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Skill < out[j].Skill })
 	return out
-}
-
-func pointsAt(path, target string) bool {
-	fi, err := os.Lstat(path)
-	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-		return false
-	}
-	dest, err := os.Readlink(path)
-	if err != nil {
-		return false
-	}
-	if !filepath.IsAbs(dest) {
-		dest = filepath.Join(filepath.Dir(path), dest)
-	}
-	return filepath.Clean(dest) == filepath.Clean(target)
 }
 
 // pathOccupied reports whether something already sits where barracks would

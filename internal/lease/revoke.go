@@ -134,6 +134,20 @@ func InspectLink(link Link, guard StoreGuard) (LinkState, *Kept) {
 	return LinkOurs, nil
 }
 
+// SymlinkPointsAt reports whether path is right now a symlink pointing at
+// exactly target.
+//
+// It answers identity and nothing else, deliberately without a StoreGuard, and
+// exists for callers deciding what to RECORD - reconciling a lease against the
+// paths an upgrade actually produced, say. Anything deciding what to remove or
+// replace must call InspectLink with the store guard instead: that extra check
+// is what stops barracks acting on a symlink resolving outside its own store,
+// and no mutation path may reach for the cheaper answer here.
+func SymlinkPointsAt(path, target string) bool {
+	state, _ := InspectLink(Link{Path: path, Target: target}, nil)
+	return state == LinkOurs
+}
+
 func revokeLink(link Link, guard StoreGuard) (removed bool, kept *Kept) {
 	state, k := InspectLink(link, guard)
 	if state != LinkOurs {

@@ -105,6 +105,27 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, equipment []load
 		recorded[link.Skill] = true
 	}
 
+	// Every skill the sources this spawn carries provide once the upgrade is
+	// done, attributed to the first source that provides it.
+	//
+	// A skill can leave one equipped source and appear in another. Handing the
+	// path over in a single relink is what keeps the decision Plan makes equal
+	// to what Apply finds on disk: a removal and an addition planned separately
+	// would have the add weighed against a path the removal has not happened to
+	// yet, and the skill would be dropped for the run.
+	provided := map[string]*move{}
+	for i := range moves {
+		mv := &moves[i]
+		if !carries(sp.sources, mv) {
+			continue
+		}
+		for name := range mv.skills {
+			if _, dup := provided[name]; !dup {
+				provided[name] = mv
+			}
+		}
+	}
+
 	var final []lease.Link
 	for _, link := range l.Links {
 		mv := e.matchMove(link, moves)
@@ -113,6 +134,13 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, equipment []load
 			continue
 		}
 		target, still := mv.skills[link.Skill]
+		if !still {
+			// Gone from the source that put it here, but another source of this
+			// spawn now provides it: one relink, over a path still proven ours.
+			if hand := provided[link.Skill]; hand != nil {
+				mv, target, still = hand, hand.skills[link.Skill], true
+			}
+		}
 		if !still {
 			if op, kept := planTouch(link, e.Store, OpRemove, ""); kept != nil {
 				sp.Kept = append(sp.Kept, *kept)

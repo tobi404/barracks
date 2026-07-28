@@ -152,14 +152,15 @@ type Engine struct {
 // exclude file. Adding an entry to the store is invisible and shared, which is
 // what lets `--dry-run` tell the exact truth instead of an estimate.
 func (e *Engine) Plan(ctx context.Context, loadouts []*loadout.Loadout, opts Options) []*LoadoutPlan {
-	leases, problems := e.Leases.List()
+	// An unreadable lease record is not this command's failure. The reaper every
+	// command runs first already reports it, and folding it in here would both
+	// print it twice and turn a run in which every source resolved, fetched and
+	// relinked cleanly into a non-zero exit.
+	leases, _ := e.Leases.List()
 
 	plans := make([]*LoadoutPlan, 0, len(loadouts))
 	for _, l := range loadouts {
-		p := e.planLoadout(ctx, l, leases, opts)
-		p.Errs = append(p.Errs, problems...)
-		problems = nil // report unreadable lease records once, not per loadout
-		plans = append(plans, p)
+		plans = append(plans, e.planLoadout(ctx, l, leases, opts))
 	}
 	return plans
 }
@@ -182,7 +183,7 @@ func (e *Engine) planLoadout(ctx context.Context, l *loadout.Loadout, leases []*
 			effective.Commit = sp.NewCommit
 			effective.Skills = sortedNames(sp.skills)
 			if opts.Pin {
-				effective.Source = eq.Source.WithRef(sp.NewCommit)
+				effective.Source = eq.WithRef(sp.NewCommit)
 			}
 			next.Equipment[i] = effective
 			p.definitionChanged = true
@@ -190,7 +191,7 @@ func (e *Engine) planLoadout(ctx context.Context, l *loadout.Loadout, leases []*
 			// Nothing moved, but --pin still has work: freezing a source that
 			// happens to be up to date is exactly what a cautious user means.
 			if opts.Pin && !source.IsCommitish(eq.Ref) {
-				effective.Source = eq.Source.WithRef(sp.NewCommit)
+				effective.Source = eq.WithRef(sp.NewCommit)
 				next.Equipment[i] = effective
 				p.definitionChanged = true
 			}
@@ -269,7 +270,7 @@ func (e *Engine) planSource(ctx context.Context, eq loadout.Equipment, opts Opti
 	}
 	sp.NewCommit = commit
 	if opts.Pin {
-		sp.NewIdent = eq.Source.WithRef(commit).Ident()
+		sp.NewIdent = eq.WithRef(commit).Ident()
 	}
 	if commit == eq.Commit {
 		sp.Status = StatusCurrent
