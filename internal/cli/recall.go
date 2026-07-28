@@ -5,8 +5,17 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tobi404/barracks/internal/garrison"
 	"github.com/tobi404/barracks/internal/lease"
 )
+
+// first is the loadout name a command was given, or "" when it was given none.
+func first(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
+}
 
 func newRecallCmd(env *Env) *cobra.Command {
 	var (
@@ -82,9 +91,9 @@ it shows up in git status for review like any other.
 			// A garrison is held by no lease and has no per-target record to
 			// narrow by: it is one committed unit, so a --target or --global
 			// recall leaves it alone rather than half-removing it.
-			var garrisoned []string
+			var garrisoned []garrison.Ref
 			if len(filter) == 0 && !global {
-				garrisoned = env.garrisonsHere(loc.Root, args, all)
+				garrisoned = env.garrisonsHere(loc.Root, first(args), all)
 			}
 
 			if len(matched) == 0 && len(garrisoned) == 0 {
@@ -94,8 +103,8 @@ it shows up in git status for review like any other.
 				}
 				return fmt.Errorf("%s is not deployed %s", args[0], where)
 			}
-			for _, name := range garrisoned {
-				rep, err := env.garrisons.Remove(loc.Root, name)
+			for _, ref := range garrisoned {
+				rep, err := env.garrisons.Remove(loc.Root, ref)
 				if err != nil {
 					return err
 				}

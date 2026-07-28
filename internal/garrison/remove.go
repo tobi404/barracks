@@ -36,16 +36,16 @@ func (r *Report) Foreign() bool { return len(r.Kept) > 0 }
 // Unlike an update, removal does not offer to override this. There is nothing to
 // keep coherent afterwards: an edited file that stays behind is simply a file the
 // repository still has, and the lockfile no longer claims it.
-func (e *Engine) Remove(root, name string) (*Report, error) {
+func (e *Engine) Remove(root string, ref Ref) (*Report, error) {
 	m, err := Load(root)
 	if err != nil {
 		return nil, err
 	}
-	g := m.Find(name)
+	g := m.FindFor(ref.ID, ref.Loadout)
 	if g == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNotGarrisoned, name)
+		return nil, fmt.Errorf("%w: %s", ErrNotGarrisoned, ref.Loadout)
 	}
-	rep := &Report{Loadout: name}
+	rep := &Report{Loadout: g.Loadout}
 
 	for _, s := range g.Skills {
 		for _, f := range s.Files {
@@ -78,7 +78,7 @@ func (e *Engine) Remove(root, name string) (*Report, error) {
 		e.pruneDir(root, rel, known, rep)
 	}
 
-	m.Drop(name)
+	m.Drop(g.ID, g.Loadout)
 	if err := m.Save(root); err != nil {
 		rep.Errors = append(rep.Errors, fmt.Errorf("update %s: %w", LockName, err))
 		return rep, nil

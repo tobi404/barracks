@@ -90,7 +90,7 @@ other loadouts using the same sources are unaffected.
 			// something visibly deployed here would be a surprise, and it is the
 			// definition an update reads from.
 			if loc, err := env.scopeOf(cmd.Context(), false); err == nil && loc.Root != "" {
-				if len(env.garrisonsHere(loc.Root, args, false)) > 0 {
+				if len(env.garrisonsHere(loc.Root, name, false)) > 0 {
 					return fmt.Errorf("loadout %q is garrisoned in %s; recall it first", name, loc.Root)
 				}
 			}

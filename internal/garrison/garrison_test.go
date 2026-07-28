@@ -331,7 +331,7 @@ func TestRemoveTakesOnlyWhatTheLockfileRecords(t *testing.T) {
 	foreign := f.path(".claude/skills/react/handwritten.md")
 	testutil.WriteFile(t, foreign, "never barracks'\n")
 
-	rep, err := f.engine.Remove(f.root, "frontend")
+	rep, err := f.engine.Remove(f.root, Ref{Loadout: "frontend"})
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -373,7 +373,7 @@ func TestRemoveLeavesOtherGarrisonsAlone(t *testing.T) {
 	f.install(f.loadout("frontend", "react"))
 	f.install(f.loadout("styles", "css"))
 
-	if _, err := f.engine.Remove(f.root, "frontend"); err != nil {
+	if _, err := f.engine.Remove(f.root, Ref{Loadout: "frontend"}); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if testutil.Exists(f.path(".claude/skills/react")) {
@@ -386,10 +386,10 @@ func TestRemoveLeavesOtherGarrisonsAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Find("frontend") != nil || m.Find("styles") == nil {
+	if m.FindFor("", "frontend") != nil || m.FindFor("", "styles") == nil {
 		t.Errorf("lockfile entries wrong after one removal: %+v", m.Garrisons)
 	}
-	if _, err := f.engine.Remove(f.root, "frontend"); !errors.Is(err, ErrNotGarrisoned) {
+	if _, err := f.engine.Remove(f.root, Ref{Loadout: "frontend"}); !errors.Is(err, ErrNotGarrisoned) {
 		t.Errorf("removing twice = %v, want ErrNotGarrisoned", err)
 	}
 }
@@ -403,7 +403,7 @@ func TestRemoveOfTheSecondGarrisonPrunesTheSharedDirectory(t *testing.T) {
 	f.install(f.loadout("styles", "css"))
 
 	for _, name := range []string{"frontend", "styles"} {
-		if _, err := f.engine.Remove(f.root, name); err != nil {
+		if _, err := f.engine.Remove(f.root, Ref{Loadout: name}); err != nil {
 			t.Fatalf("remove %s: %v", name, err)
 		}
 	}
@@ -898,5 +898,172 @@ func TestInstallOutsideAGitRepositorySaysSo(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(res.Notices, "\n"), "nothing will carry them to your team") {
 		t.Errorf("no notice about being outside a repository: %v", res.Notices)
+	}
+}
+
+// TestFindForMatchesByIdentityThenName is the whole rule the committed tier's
+// rename safety rests on, and the one that cannot be fixed after release: a
+// lockfile already in somebody's repository can never be reached to migrate it.
+func TestFindForMatchesByIdentityThenName(t *testing.T) {
+	m := &Manifest{Garrisons: []Garrison{
+		{Loadout: "frontend", ID: "aaa"},
+		{Loadout: "legacy"}, // written before identities existed
+		{Loadout: "styles", ID: "ccc"},
+	}}
+
+	tests := []struct {
+		name    string
+		id, ask string
+		want    string // the entry's Loadout, or "" for no match
+	}{
+		{"identity wins over the name", "aaa", "renamed-since", "frontend"},
+		{"identity found under a stale name", "ccc", "anything", "styles"},
+		{"a pre-identity entry falls back to its name", "bbb", "legacy", "legacy"},
+		{"a caller with no identity still matches by name", "", "frontend", "frontend"},
+		{"a name nothing carries", "zzz", "nowhere", ""},
+		// Two machines can train different loadouts under one name. A recorded
+		// identity that disagrees proves that, and is the only case where a name
+		// match is declined - anything looser would install one loadout's skills
+		// over another's records.
+		{"a different loadout sharing the name", "zzz", "frontend", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := m.FindFor(tt.id, tt.ask)
+			switch {
+			case tt.want == "" && g != nil:
+				t.Errorf("matched %q, want no match", g.Loadout)
+			case tt.want != "" && g == nil:
+				t.Errorf("no match, want %q", tt.want)
+			case tt.want != "" && g.Loadout != tt.want:
+				t.Errorf("matched %q, want %q", g.Loadout, tt.want)
+			}
+		})
+	}
+}
+
+// TestUpsertAndDropFollowTheSameMatching: a renamed loadout must replace its own
+// entry rather than appending a second one, and drop the same one.
+func TestUpsertAndDropFollowTheSameMatching(t *testing.T) {
+	m := &Manifest{Garrisons: []Garrison{
+		{Loadout: "frontend", ID: "aaa", Targets: []string{"claude"}},
+		{Loadout: "legacy", Targets: []string{"claude"}},
+	}}
+
+	m.Upsert(Garrison{Loadout: "web", ID: "aaa", Targets: []string{"cursor"}})
+	if len(m.Garrisons) != 2 {
+		t.Fatalf("upsert under a new name appended: %+v", m.Garrisons)
+	}
+	if g := m.FindFor("aaa", "web"); g == nil || g.Targets[0] != "cursor" {
+		t.Errorf("upsert did not replace the entry: %+v", m.Garrisons)
+	}
+
+	// A pre-identity entry is upserted by name and gains the identity.
+	m.Upsert(Garrison{Loadout: "legacy", ID: "bbb"})
+	if len(m.Garrisons) != 2 {
+		t.Fatalf("upsert over a pre-identity entry appended: %+v", m.Garrisons)
+	}
+
+	if !m.Drop("aaa", "web") || len(m.Garrisons) != 1 {
+		t.Fatalf("drop by identity left %+v", m.Garrisons)
+	}
+	if m.Drop("nothing", "gone") {
+		t.Error("drop reported removing an entry that was not there")
+	}
+}
+
+// TestRenameStampsThePreIdentityEntry: renaming is the moment a lockfile written
+// before identities existed stops being findable by name, so it is also the
+// moment it has to be given one.
+func TestRenameStampsThePreIdentityEntry(t *testing.T) {
+	m := &Manifest{Garrisons: []Garrison{{Loadout: "frontend"}}}
+
+	if !m.Rename("aaa", "frontend", "web") {
+		t.Fatal("rename did not find the entry by name")
+	}
+	g := m.Garrisons[0]
+	if g.Loadout != "web" || g.ID != "aaa" {
+		t.Errorf("entry = %q/%q, want web/aaa", g.Loadout, g.ID)
+	}
+	// And it is found by identity afterwards, whatever the name says.
+	if m.FindFor("aaa", "anything") == nil {
+		t.Error("the stamped entry is not findable by identity")
+	}
+	if m.Rename("zzz", "web", "other") {
+		t.Error("renamed an entry whose identity disagrees")
+	}
+}
+
+// TestRawRoundTripsTheLockfileExactly: an undo has to put back the bytes that
+// were there, not an equivalent re-marshalling of them.
+func TestRawRoundTripsTheLockfileExactly(t *testing.T) {
+	f := newFixture(t)
+
+	if b, err := ReadRaw(f.root); err != nil || b != nil {
+		t.Fatalf("ReadRaw with no lockfile = %q, %v; want nil", b, err)
+	}
+	f.install(f.loadout("frontend"))
+	before, err := ReadRaw(f.root)
+	if err != nil || len(before) == 0 {
+		t.Fatalf("ReadRaw = %q, %v", before, err)
+	}
+
+	m, err := Load(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Rename("", "frontend", "web")
+	if err := m.Save(f.root); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := ReadRaw(f.root); string(after) == string(before) {
+		t.Fatal("the rename did not change the file, so the undo proves nothing")
+	}
+
+	if err := WriteRaw(f.root, before); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := ReadRaw(f.root); string(got) != string(before) {
+		t.Errorf("WriteRaw did not restore the file byte for byte:\n%s", got)
+	}
+
+	// Nil means there was no lockfile, so the file goes rather than being
+	// emptied - a husk nobody can tell is inert is exactly what Save avoids too.
+	if err := WriteRaw(f.root, nil); err != nil {
+		t.Fatal(err)
+	}
+	if testutil.Exists(Path(f.root)) {
+		t.Error("WriteRaw(nil) left a lockfile behind")
+	}
+}
+
+// TestDroppingASkillReportsWhatIsHoldingItsDirectoryOpen: a skill leaving a
+// garrison - dropped upstream, or its source detached - takes its own files and
+// nothing else. A file no record accounts for is kept, and saying so is not
+// optional: barracks is leaving somebody's work inside a directory it used to
+// manage, and that must never be something they find out for themselves.
+func TestDroppingASkillReportsWhatIsHoldingItsDirectoryOpen(t *testing.T) {
+	f := newFixture(t)
+	f.install(f.loadout("frontend"))
+
+	mine := f.path(".claude/skills/css/notes.md")
+	testutil.WriteFile(t, mine, "mine\n")
+
+	res := f.install(f.loadout("frontend", "react"))
+
+	var said bool
+	for _, n := range res.Notices {
+		if strings.Contains(n, "notes.md") && strings.Contains(n, "no record") {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("a file left behind in a dropped skill directory was not reported: %v", res.Notices)
+	}
+	if got := testutil.ReadFile(t, mine); got != "mine\n" {
+		t.Errorf("the file was destroyed: %q", got)
+	}
+	if testutil.Exists(f.path(".claude/skills/css/SKILL.md")) {
+		t.Error("the dropped skill's own file survived")
 	}
 }

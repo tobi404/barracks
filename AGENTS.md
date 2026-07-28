@@ -200,6 +200,47 @@ deliberate decision, not a refactor.
   `garrison.Guard`) refuses the reverse. Never drop one half - a path both excluded from git
   as a symlink and committed as a file either hides the files from the team or dirties every
   checkout forever.
+- **A loadout's identity is what the committed tier keys on; its name is a label.**
+  `loadout.Loadout.ID` is minted once (`loadout.NewID`) and never derived from the name, so
+  `rename` is a display change. It exists because `barracks.lock` lives in somebody else's
+  repository: barracks can rewrite the lockfiles it can reach and none of the checkouts it
+  cannot, so a name-keyed record would be orphaned there forever. `garrison.Manifest.FindFor`
+  is the single rule - identity when both sides carry one, name otherwise - and `Upsert`,
+  `Drop` and `Rename` all go through it. **A missing identity must never read as a mismatch**:
+  that would make a garrison fail to match its own loadout and be refused over, or written
+  past, rather than updated. The only case a name match is declined is both sides carrying
+  identities that disagree, which proves two different loadouts trained under one name.
+  `loadout.Store.Get` backfills an identity for a pre-existing definition *and persists it*,
+  dropping it back to empty if that write fails - a volatile identity stamped into a lockfile
+  could never be matched again, while none at all is exactly the old behaviour.
+  `garrison.Version` deliberately stayed at 1: `Load` refuses anything newer, so bumping it
+  for an additive field would make older builds refuse a repository they can still read. Bump
+  it only for a change an older build would get *wrong*, and add a `<field>Since` constant
+  rather than comparing against `Version`, as `lease.provenanceSince` does.
+- **`strip` is `upgrade` with the network half removed, and the committed half moved first.**
+  `upgrade.PlanRemoval` builds a move for every surviving source at the commit it is already
+  pinned at, plus a *move to nothing* for the dropped one, and hands them to the same
+  `planSpawns`. That is what makes a skill two sources provide get **handed over** in one
+  relink instead of deleted - the one case the feature is most likely to get wrong. Two
+  deliberate differences from an upgrade, each with its own reason. (1) `moveAt` *refuses*
+  where `moveFor` returns nil: an upgrade can leave links it cannot reason about alone, but a
+  removal deciding between "hand over" and "delete" cannot. (2) `Options.handOverToAnySource`
+  widens the handover past the spawn's provenance, because that gate exists to stop an upgrade
+  *materialising* a source a spawn was never made from - additions stay gated either way, so a
+  strip can never add a skill. `cli.Env.stripGarrison` runs **before** the definition is saved
+  and the spawns relinked, the opposite of `upgrade`, because it is the half that can refuse
+  and a refusal has to arrive with everything else untouched; `upgrade` runs it last because
+  there it must land on pins the definition already records. A live `barracks run` session
+  refuses a strip rather than being skipped: an upgrade's skip is recoverable because the
+  source is still equipped, and a stripped one is gone, so nothing would ever come back for
+  the links it left.
+- **`rename` writes the lockfile first and can put every record back.** `cli.renamer` orders
+  lockfile, definition, leases, because the lockfile is the only record a rename can *orphan* -
+  a pre-identity entry is found by name alone. Undo restores the lockfile from the bytes
+  `garrison.ReadRaw` captured rather than by re-marshalling, because that file's diff is read
+  by people. The voice's escalation state is keyed by name too and is deliberately not
+  migrated: it forgets everything after ten quiet minutes, and a renamed loadout starting
+  fresh is the right answer.
 - **The lockfile's per-file digest is the committed tier's proof of ownership.** A symlink can
   be checked by where it points; a vendored file cannot, so `garrison.File.Digest` is what
   makes "barracks wrote this" decidable. Two questions must stay separate, and conflating them
@@ -242,7 +283,8 @@ deliberate decision, not a refactor.
   escalate too. For the same reason the escalation key carries *where* a command acted
   (`cli.Env.actedIn`, from the resolved repository root, with `--global` its own place):
   repository-scoped commands are `spawn`, `recall`, `garrison` and `run`, while `train`,
-  `equip` and `upgrade` are not, and each says so for itself rather than having it inferred.
+  `equip`, `strip` and `upgrade` are not, and each says so for itself rather than having it
+  inferred.
   That gating leaves the suite blind to it by default, so `internal/cli/voice_test.go`
   forces `Env.Tty` on deliberately and pins `Env.Rand`; a voice change proved only by a
   passing suite is not proved at all. Lines must be **original** - this is a public repo, so

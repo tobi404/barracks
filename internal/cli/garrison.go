@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tobi404/barracks/internal/garrison"
+	"github.com/tobi404/barracks/internal/loadout"
 	"github.com/tobi404/barracks/internal/spawn"
 )
 
@@ -98,7 +99,7 @@ on this machine. Use barracks inspect to see whether a checkout needs it.`),
 			// An existing garrison's recorded targets win over detection: an
 			// update must not quietly stop installing into an agent the
 			// repository already committed files for.
-			if existing := env.garrisonedTargets(loc.Root, l.Name); len(existing) > 0 && len(targetIDs) == 0 && len(l.Targets) == 0 {
+			if existing := env.garrisonedTargets(loc.Root, l); len(existing) > 0 && len(targetIDs) == 0 && len(l.Targets) == 0 {
 				sel, err = env.selectTargetsFor(cmd.Context(), l, existing, false, nil)
 				if err != nil {
 					return err
@@ -112,6 +113,7 @@ on this machine. Use barracks inspect to see whether a checkout needs it.`),
 				Root:      loc.Root,
 				GitDir:    loc.GitDir,
 				Name:      l.Name,
+				ID:        l.ID,
 				Equipment: l.Equipment,
 				Targets:   sel.Targets,
 				Force:     force,
@@ -129,12 +131,12 @@ on this machine. Use barracks inspect to see whether a checkout needs it.`),
 }
 
 // garrisonedTargets is the target list the lockfile records for a loadout.
-func (e *Env) garrisonedTargets(root, name string) []string {
+func (e *Env) garrisonedTargets(root string, l *loadout.Loadout) []string {
 	m, err := garrison.Load(root)
 	if err != nil {
 		return nil
 	}
-	if g := m.Find(name); g != nil {
+	if g := m.FindFor(l.ID, l.Name); g != nil {
 		return g.Targets
 	}
 	return nil
@@ -169,24 +171,38 @@ func printGarrison(env *Env, res *garrison.Result) {
 	}
 }
 
-// garrisonsHere is the garrisons a recall in this repository should remove:
-// every one when --all, otherwise the named loadout if it is garrisoned.
-func (e *Env) garrisonsHere(root string, args []string, all bool) []string {
+// garrisonsHere is the garrisons a command in this repository should act on:
+// every one when all, otherwise the named loadout if it is garrisoned.
+//
+// The named lookup goes through the lockfile's own matching rather than
+// comparing names, so a loadout renamed while this repository was not the one
+// standing in front of barracks is still recognised by the identity its entry
+// carries.
+func (e *Env) garrisonsHere(root, name string, all bool) []garrison.Ref {
 	if root == "" {
 		return nil
 	}
-	names, err := garrison.Garrisoned(root)
+	refs, err := garrison.Garrisoned(root)
 	if err != nil {
 		fmt.Fprintf(e.Err, "! %v\n", err)
 		return nil
 	}
 	if all {
-		return names
+		return refs
 	}
-	for _, n := range names {
-		if len(args) > 0 && n == args[0] {
-			return []string{n}
-		}
+	if name == "" {
+		return nil
+	}
+	m, err := garrison.Load(root)
+	if err != nil {
+		return nil
+	}
+	var id string
+	if l, lerr := e.loadouts.Get(name); lerr == nil {
+		id = l.ID
+	}
+	if g := m.FindFor(id, name); g != nil {
+		return []garrison.Ref{{ID: g.ID, Loadout: g.Loadout}}
 	}
 	return nil
 }
@@ -252,6 +268,15 @@ Exits non-zero when anything does not match, so it can gate a build.`),
 					g.Loadout, g.SkillCount(), plural(g.SkillCount(), "skill", "skills"),
 					g.FileCount(), plural(g.FileCount(), "file", "files"),
 					strings.Join(g.Targets, ", "), state)
+				// The name above is a label; this is what the entry is really
+				// keyed on, and the reason renaming the loadout leaves this
+				// checkout working. An entry written before identities existed
+				// says so rather than showing a blank.
+				if g.ID != "" {
+					fmt.Fprintf(env.Out, "  identity: %s\n", g.ID)
+				} else {
+					fmt.Fprintf(env.Out, "  identity: none recorded - matched by name (written before identities)\n")
+				}
 				for _, f := range c.Findings {
 					fmt.Fprintf(env.Out, "  ! %s\n", f)
 				}

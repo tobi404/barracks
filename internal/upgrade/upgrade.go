@@ -48,6 +48,19 @@ type Options struct {
 	// IncludeRunning relinks spawns whose lease is held by a live process.
 	// Off by default: see the package's decision in relink.go.
 	IncludeRunning bool
+
+	// handOverToAnySource lets a link whose own source stopped providing its
+	// skill be handed to any source in the plan rather than only to one the
+	// spawn was made from. Unexported because only PlanRemoval may set it, and
+	// only because it asks a different question.
+	//
+	// The provenance gate exists to stop an upgrade *materialising* a source a
+	// spawn was never made from. Removing a skill a still-equipped source
+	// provides is the opposite direction: the path is already there and already
+	// holds that skill, and deleting it because the source that happened to put
+	// it down has gone would be the answer nobody wants. Additions stay gated
+	// either way, so stripping a source can never add one.
+	handOverToAnySource bool
 }
 
 // Diff is the per-skill change between two commits of one source.

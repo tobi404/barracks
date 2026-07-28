@@ -125,6 +125,25 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, equipment []load
 			}
 		}
 	}
+	// What a link may be handed to when its own source stops providing its
+	// skill. The same map as provided for an upgrade, and every source in the
+	// plan for a removal - see Options.handOverToAnySource for why the two
+	// questions differ. It never feeds the additions below.
+	handover := provided
+	if opts.handOverToAnySource {
+		handover = map[string]*move{}
+		for name, mv := range provided {
+			handover[name] = mv
+		}
+		for i := range moves {
+			mv := &moves[i]
+			for name := range mv.skills {
+				if _, dup := handover[name]; !dup {
+					handover[name] = mv
+				}
+			}
+		}
+	}
 
 	var final []lease.Link
 	for _, link := range l.Links {
@@ -137,7 +156,7 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, equipment []load
 		if !still {
 			// Gone from the source that put it here, but another source of this
 			// spawn now provides it: one relink, over a path still proven ours.
-			if hand := provided[link.Skill]; hand != nil {
+			if hand := handover[link.Skill]; hand != nil {
 				mv, target, still = hand, hand.skills[link.Skill], true
 			}
 		}
