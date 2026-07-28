@@ -337,8 +337,11 @@ func (e *Engine) SpawnAll(ctx context.Context, req Request, targets []target.Tar
 //
 // A source that happens to export nothing today is still one this spawn was
 // made from, and recording it is what lets a later upgrade attach its skills
-// when they appear. A source equipped *after* this call is deliberately not in
-// the record, so an upgrade never silently materialises one.
+// when they appear. A source equipped *after* this call is deliberately not
+// added to the record. That keeps out one at a repository or subpath this
+// spawn was never made from, but not a second ref of a repository and subpath
+// already recorded here - matching ignores the ref. README.md and carries in
+// internal/upgrade hold that rule and the reason it is ref-blind.
 func provenance(l *loadout.Loadout) []lease.SourceRef {
 	if len(l.Equipment) == 0 {
 		return nil
