@@ -257,12 +257,24 @@ deliberate decision, not a refactor.
   text. (2) Hiding the cursor and arming the signal handler happen in one place under one
   lock (`Step.tick`), and the handler restores, calls `signal.Reset`, then re-raises, so
   barracks still dies of the signal with the status it always had. A process that exits with
-  the cursor hidden leaves the user typing blind. (3) **Nothing repaints over a line a child
-  process may write to.** `gitcmd` captures git's streams and sets `GIT_TERMINAL_PROMPT=0`,
-  so `ssh` opening `/dev/tty` for a passphrase or a host-key confirmation is the only
-  remaining path to the terminal - `store.overSSH` is what decides that, and such a step runs
-  in the same append-only mode as a redirected stream. Widening animation to SSH sources would
-  erase the prompt at the moment the user is most stuck. The only slow work barracks does goes
+  the cursor hidden leaves the user typing blind. (3) **Nothing whose child might reach the
+  terminal is ever animated.** That is one rule, and `store.sharesTerminal` is the one place
+  it is asked; SSH and credential helpers are two instances of it, not two special cases.
+  `gitcmd` captures git's streams and sets `GIT_TERMINAL_PROMPT=0`, so git itself can neither
+  read the terminal nor write to it - which is exactly why the two programs that ignore that
+  variable have to be handled separately: `ssh` opens `/dev/tty` itself for a passphrase or a
+  host-key confirmation, and a credential helper is a separate process free to do the same
+  (Git Credential Manager prompts on the terminal and answers to its own `GCM_INTERACTIVE`).
+  So an SSH source is never animated, and an http/https/git:// one only when every configured
+  `credential.helper` is on the verified allowlist in `internal/store/terminal.go` *and* the
+  configuration was readable; anything else runs in the same append-only mode as a redirected
+  stream. The asymmetry is the whole argument: being over-cautious costs a user only the
+  animation, being under-cautious costs them a prompt erased ten times a second at the moment
+  they are most stuck. Add to that allowlist only with the same evidence the entries carry,
+  never from memory. A local source stays animated unconditionally - git consults no helper
+  for a path on disk. The read is one `git config --get-regexp` per run, cached and lazy, and
+  exit status 1 with no output means *no helper is configured* (safe, still animated), never
+  "unreadable". The only slow work barracks does goes
   through `store.Resolve`/`store.Ensure`, which is why one reporter on `*store.Store` covers
   `equip`, `upgrade`, `spawn`, `garrison` and `run`; a new slow path must announce itself
   there or grow its own step. Thresholds are named constants in `internal/progress` and

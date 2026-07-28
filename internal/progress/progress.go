@@ -19,10 +19,10 @@
 //   - The terminal is always restored. Hiding the cursor is paired with showing
 //     it again on every exit path: success, failure, panic, and SIGINT/SIGTERM.
 //   - Nothing repaints over a line another process may be writing to. A step
-//     whose child process can reach the terminal - a fetch over SSH, where ssh
-//     opens /dev/tty for a passphrase or a host-key confirmation - runs in the
-//     same append-only mode as a redirected stream, so the prompt stays readable
-//     and the user's typing works.
+//     whose child process can reach the terminal - ssh opening /dev/tty for a
+//     passphrase or a host-key confirmation, or a credential helper prompting
+//     for its own - runs in the same append-only mode as a redirected stream, so
+//     the prompt stays readable and the user's typing works.
 package progress
 
 import (
@@ -114,6 +114,14 @@ type Reporter struct {
 	LongWait time.Duration
 }
 
+// Animates reports whether this reporter would animate a step at all: it has
+// somewhere to write, and that somewhere is a terminal.
+//
+// It is what lets a caller skip work only an animated display needs the answer
+// to - deciding Work.SharesTerminal can cost a subprocess, and a redirected run
+// has nothing to paint over either way. A nil *Reporter never animates.
+func (r *Reporter) Animates() bool { return r != nil && r.W != nil && r.Live }
+
 // Work describes one unit of slow work.
 type Work struct {
 	// Subject is what is being worked on - a repository, not a file.
@@ -122,11 +130,12 @@ type Work struct {
 	// "resolving", "fetching", "unpacking".
 	Phase string
 	// SharesTerminal says a child process of this work may write to the user's
-	// terminal or read from it. Fetching over SSH is the case that matters: ssh
-	// opens /dev/tty directly for a passphrase or a host-key confirmation, so
-	// it bypasses every stream barracks captured and lands on the same line the
-	// spinner is repainting. A step that says so is never animated, so the
-	// prompt survives and the answer reaches ssh.
+	// terminal or read from it: ssh opening /dev/tty for a passphrase or a
+	// host-key confirmation, or an interactive credential helper doing the
+	// same. Either bypasses every stream barracks captured and lands on the
+	// exact line the spinner is repainting. A step that says so is never
+	// animated, so the prompt survives and the answer reaches the program
+	// waiting for it.
 	SharesTerminal bool
 }
 

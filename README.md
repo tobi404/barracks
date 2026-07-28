@@ -477,9 +477,12 @@ Like the voice, it is decoration and keeps out of the way:
 - **Escape sequences only on a terminal.** Redirect stderr or run in CI and you get the same
   lines as plain text with no spinner and no cursor tricks, because an escape code in a log
   file is corruption.
-- **It never takes the terminal from git.** Fetching over SSH is not animated at all, so an
-  ssh passphrase or host-key prompt stays readable and answerable - ssh writes those
-  straight to your terminal, and nothing here will paint over them.
+- **It never takes the terminal from git.** Anything that might ask you a question gets the
+  terminal to itself: fetching over SSH is not animated at all, and neither is a fetch where
+  git is configured with a credential helper barracks cannot show is silent. A passphrase,
+  host-key or credential prompt stays readable and answerable - those are written straight to
+  your terminal, and nothing here will paint over them. You still get every line, just
+  without the spinner.
 - **The cursor always comes back**, on success, on failure, and on Ctrl-C.
 
 `--quiet` (`-q`) and `BARRACKS_QUIET=1` turn it off along with the voice. One switch for

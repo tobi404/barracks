@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/tobi404/barracks/internal/gitcmd"
 	"github.com/tobi404/barracks/internal/progress"
@@ -29,6 +30,18 @@ type Store struct {
 	// reaches the network through this package and nowhere else, which is why
 	// one reporter here covers all of them. A nil reporter is silent.
 	Progress *progress.Reporter
+
+	// Workdir is where git configuration is read from when the display needs to
+	// know whether a credential helper could reach the terminal, so a
+	// repository's local scope is seen alongside the global and system ones.
+	// Empty means the process's own working directory.
+	Workdir string
+
+	// The one credential-helper read a run makes. See
+	// credentialHelpersStaySilent; unset means "not known to stay silent",
+	// which is the safe answer for a read that never happened or failed.
+	helpersOnce   sync.Once
+	helpersSilent bool
 }
 
 // New builds a Store over the given roots.
@@ -53,7 +66,7 @@ func (s *Store) Resolve(ctx context.Context, src source.Source) (string, error) 
 	if source.IsFullSHA(src.Ref) {
 		return src.Ref, nil
 	}
-	step := s.step(src, "resolving")
+	step := s.step(ctx, src, "resolving")
 	defer step.Fail() // no-op once Done has run; the guarantee is on the panic path
 	commit, err := s.Git.ResolveRef(ctx, src.CloneURL, src.Ref)
 	if err != nil {
@@ -83,7 +96,7 @@ func (s *Store) Ensure(ctx context.Context, src source.Source, commit string) (d
 	// Everything past here is the slow half: a network fetch, then unpacking a
 	// tree. The early return above is why a warm store stays silent - it never
 	// gets as far as announcing anything.
-	step := s.step(src, "fetching")
+	step := s.step(ctx, src, "fetching")
 	defer step.Fail() // no-op once Done has run; restores the terminal on every other path
 
 	mirror := filepath.Join(s.Mirrors, src.MirrorKey())
@@ -135,35 +148,15 @@ func (s *Store) Ensure(ctx context.Context, src source.Source, commit string) (d
 // display a flush before printing its own report. Separate steps cost a second
 // line only when resolving and fetching were each slow enough to be announced -
 // and when that happens, "resolving took 30s of this" is worth saying.
-func (s *Store) step(src source.Source, phase string) *progress.Step {
-	return s.Progress.Step(progress.Work{
-		Subject:        src.RepoKey(),
-		Phase:          phase,
-		SharesTerminal: overSSH(src.CloneURL),
-	})
-}
-
-// overSSH reports whether fetching this URL can put a prompt on the user's
-// terminal, which decides whether the step may be animated at all.
-//
-// gitcmd captures git's own stdout and stderr and sets GIT_TERMINAL_PROMPT=0,
-// so git itself can neither read from the terminal nor write to it. The one way
-// out is ssh, which opens /dev/tty directly for a key passphrase or a host-key
-// confirmation and so bypasses all of that. Every other transport barracks
-// accepts - https, http, git://, a filesystem path - has no such escape, which
-// is why they can safely be animated.
-func overSSH(cloneURL string) bool {
-	u := strings.TrimSpace(cloneURL)
-	if i := strings.Index(u, "://"); i >= 0 {
-		scheme := strings.ToLower(u[:i])
-		return scheme == "ssh" || strings.HasSuffix(scheme, "+ssh")
+func (s *Store) step(ctx context.Context, src source.Source, phase string) *progress.Step {
+	work := progress.Work{Subject: src.RepoKey(), Phase: phase}
+	// Only an animated display can paint over somebody, and answering this can
+	// cost a git subprocess - so a run that is not animating anyway (redirected,
+	// quiet, in CI) neither needs the answer nor pays for it.
+	if s.Progress.Animates() {
+		work.SharesTerminal = s.sharesTerminal(ctx, src.CloneURL)
 	}
-	if filepath.IsAbs(u) || strings.HasPrefix(u, ".") {
-		return false // a local repository on disk
-	}
-	// Whatever is left with a colon in it is the scp-like form git hands to
-	// ssh: git@github.com:owner/repo.git.
-	return strings.Contains(u, ":")
+	return s.Progress.Step(work)
 }
 
 // Locate reads a store path back: given a source, it reports which commit of

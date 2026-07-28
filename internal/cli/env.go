@@ -63,7 +63,6 @@ type Env struct {
 	engine    *spawn.Engine
 	garrisons *garrison.Engine
 	speaker   *voice.Speaker
-	progress  *progress.Reporter
 	place     string
 	preview   bool
 	quiet     bool
@@ -82,9 +81,12 @@ func (e *Env) init() error {
 	}
 	e.loadouts = loadout.NewStore(e.Layout.LoadoutsDir())
 	e.leases = lease.NewStore(e.Layout.LeasesDir())
-	e.progress = e.newProgress()
 	e.store = store.New(e.Layout.StoreDir(), e.Layout.MirrorsDir(), e.Git)
-	e.store.Progress = e.progress
+	e.store.Progress = e.newProgress()
+	// Where git configuration is read from when the display has to decide
+	// whether a credential helper could reach the terminal: the directory the
+	// user is standing in, so this repository's local scope counts too.
+	e.store.Workdir = e.Cwd
 	e.engine = &spawn.Engine{
 		Store:  e.store,
 		Leases: e.leases,

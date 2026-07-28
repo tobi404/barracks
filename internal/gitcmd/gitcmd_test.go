@@ -404,3 +404,60 @@ func TestCustomBinary(t *testing.T) {
 		t.Errorf("custom binary = %q, want /usr/bin/git", got)
 	}
 }
+
+// TestConfigMatching pins the distinction the whole call is for: git exits 1
+// with no output to say nothing matches, and reading that as a failure would
+// have a caller treat "no such setting" as "I could not find out" - opposite
+// conclusions for a setting whose absence is the safe state.
+func TestConfigMatching(t *testing.T) {
+	dir := t.TempDir()
+	g := Git{}
+	const pattern = `^credential\.(.*\.)?helper$`
+
+	// The ambient machine has its own configuration - the Xcode-shipped system
+	// gitconfig sets a credential helper, a CI runner sets none - so it is
+	// pinned here rather than read.
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+	t.Run("nothing configured", func(t *testing.T) {
+		t.Setenv("GIT_CONFIG_GLOBAL", write(t, dir, "empty", ""))
+		got, err := g.ConfigMatching(ctx(), dir, pattern)
+		if err != nil {
+			t.Fatalf("no match should not be an error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("ConfigMatching = %q, want nothing", got)
+		}
+	})
+
+	t.Run("every scope and every spelling", func(t *testing.T) {
+		t.Setenv("GIT_CONFIG_GLOBAL", write(t, dir, "global",
+			"[credential]\nhelper = \nhelper = osxkeychain\n[credential \"https://example.com\"]\nhelper = cache --timeout=1\n"))
+		got, err := g.ConfigMatching(ctx(), dir, pattern)
+		if err != nil {
+			t.Fatalf("ConfigMatching: %v", err)
+		}
+		// The empty value is git's reset directive and has to survive the read:
+		// a caller cannot classify what it never sees.
+		want := []string{"", "osxkeychain", "cache --timeout=1"}
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("ConfigMatching = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("configuration that cannot be read", func(t *testing.T) {
+		t.Setenv("GIT_CONFIG_GLOBAL", write(t, dir, "broken", "this is not a config file\n"))
+		if _, err := g.ConfigMatching(ctx(), dir, pattern); err == nil {
+			t.Error("an unparsable config file should be reported as an error")
+		}
+	})
+}
+
+func write(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
