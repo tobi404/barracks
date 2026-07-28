@@ -106,7 +106,8 @@ homebrew_casks:
       # formula never lands.
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/tobi404/barracks
-    description: Spawn agent skill loadouts into any repo - permanently, per project, or just for one session
+    # Homebrew's own style check rejects a desc of 80 characters or more.
+    description: Spawn agent skill loadouts into any repo, or just for one session
     # brk is the alias people actually type. A cask that linked only barracks
     # would be a half-install, so both are named explicitly.
     binaries:
@@ -118,10 +119,13 @@ homebrew_casks:
     hooks:
       post:
         install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status.zero?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/barracks"]
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/brk"]
           end
+    # No zap stanza: GoReleaser renders one with indentation `brew style`
+    # rejects, and `~/.barracks` is a store shared with `go install`ed copies -
+    # an uninstall has no business assuming it may go.
     commit_author:
       name: barracks-release
       email: 41898282+github-actions[bot]@users.noreply.github.com
