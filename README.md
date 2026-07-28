@@ -18,6 +18,10 @@ barracks garrison frontend                                 # or commit it, for t
 barracks run frontend -- claude                            # or just for one session
 ```
 
+Loadouts are editable after the fact: `barracks strip` takes a source back out of one and out
+of everywhere it is deployed, and `barracks rename` renames it without breaking a single
+deployment.
+
 ---
 
 ## Where to start
@@ -27,6 +31,8 @@ barracks run frontend -- claude                            # or just for one ses
 | Install it | [Install](#install) |
 | Learn the commands | [Commands](#commands) |
 | Keep skills up to date | [`barracks upgrade`](#barracks-upgrade-loadout) |
+| Drop a source I no longer want | [`barracks strip`](#barracks-strip-loadout-source) |
+| Rename a loadout | [`barracks rename`](#barracks-rename-loadout-new-name) |
 | Share one skill set with my team | [Personal or shared](#personal-or-shared) |
 | Check a checkout matches what was committed | [`barracks inspect`](#barracks-inspect) |
 | Understand source syntax | [Source syntax](#source-syntax) |
@@ -146,7 +152,81 @@ repo rather than all of them.
 Equipping a source a loadout already has re-pins it to the newly resolved commit instead of
 attaching a second copy. A different `#ref` or subpath is a different source and is kept
 alongside. To move a whole loadout forward later, and every repo it is spawned into with it,
-use [`barracks upgrade`](#barracks-upgrade-loadout).
+use [`barracks upgrade`](#barracks-upgrade-loadout); to take one back out again, use
+[`barracks strip`](#barracks-strip-loadout-source).
+
+### `barracks strip <loadout> <source>`
+
+Detaches a source from a loadout, and takes the skills it contributed back out of
+every live spawn of that loadout and out of this repository's garrison. The inverse of
+`barracks equip`.
+
+```bash
+barracks strip frontend gh:owner/skills
+barracks strip frontend github.com/owner/monorepo#main:packages/skills
+```
+
+Everything the loadout's other sources provide stays exactly where it is, and a skill
+another equipped source also provides is **handed over to it** rather than removed. The
+report says which is which, with the same marks the rest of barracks uses:
+
+```
+stripped github.com/owner/skills#main:skills from frontend
+  - css
+  ~ react (still provided by github.com/other/skills#main:skills)
+```
+
+Name the source however you like - the shorthand you equipped it with, or the full label
+`barracks list` prints. The ref is ignored when it does not match, because
+[`--pin`](#barracks-upgrade-loadout) rewrites it. A spelling that could mean two equipped
+sources is refused rather than guessed at:
+
+```
+barracks: source matches more than one equipped entry: github.com/owner/skills could mean
+github.com/owner/skills#main:skills or github.com/owner/skills#v1:skills; name one of them exactly
+```
+
+Removal obeys the same rule as [recall](#barracks-recall-loadout): a spawned path is removed
+only while it is still a symlink into the barracks store, and a committed file only while it
+still matches the digest `barracks.lock` recorded. Anything else is kept and reported. A
+vendored file you have edited stops the whole thing; `--force` replaces it.
+
+Stripping the **last** source is allowed and leaves an empty loadout - it is not disbanded, so
+you can equip it with something else. Its spawns are recalled and its garrison removed,
+because there is nothing left for them to hold.
+
+A spawn held by a live `barracks run` session refuses the strip rather than being skipped.
+An upgrade can leave a session alone because the source is still equipped and the next run
+picks it up again; a stripped source is gone from the definition, so nothing would ever come
+back for the links it left. Wait for the session to exit, or recall it first.
+
+Only *this* repository's garrison is reached - `barracks.lock` travels with the repository
+rather than with the machine, which is the same limit `barracks upgrade` has.
+
+### `barracks rename <loadout> <new-name>`
+
+Renames a loadout everywhere this machine records its name: the definition, every live
+spawn's lease, and this repository's `barracks.lock`.
+
+```bash
+barracks rename frontend web
+```
+
+Nothing on disk moves. A spawned symlink and a committed skill file are named after the
+*skill*, never after the loadout, so a rename changes records and leaves deployments exactly
+where they are - `git status` included.
+
+**A loadout carries a stable identity that a rename does not change**, minted once when it is
+trained and recorded in `barracks.lock` beside the name. That is what keeps a garrison working
+in a checkout barracks cannot reach: the name in a teammate's clone goes stale, and the
+identity still matches. `barracks inspect` prints it.
+
+A lockfile written before identities existed carries none, so it is matched by name - which is
+why renaming rewrites the lockfile here rather than leaving it to be noticed later. Commit that
+change like any other. Nothing ever reads a missing identity as a mismatch.
+
+Renaming onto a name already in use is refused and changes nothing. So is a rename that cannot
+be completed: if any record cannot be written, every record already written is put back.
 
 ### `barracks spawn <loadout>`
 
@@ -227,10 +307,15 @@ barracks inspect
 
 ```
 frontend  3 skills, 5 files  [claude, cursor]  3 problems
+  identity: 940f8b3821e4c07d
   ! .claude/skills/css/SKILL.md: missing
   ! .claude/skills/react/SKILL.md: modified
   ! .claude/skills/react/notes.md: not in the lockfile
 ```
+
+The identity is what the lockfile entry is really keyed on; the name beside it is a label a
+[rename](#barracks-rename-loadout-new-name) can change. A lockfile written before identities
+existed says `none recorded` and is matched by name.
 
 `barracks.lock` records a digest per file, so a file edited by hand, dropped in a rebase,
 half-merged, or added inside a vendored skill directory is reported rather than silently
@@ -443,8 +528,9 @@ rules with no guessing. See [Choosing targets](#choosing-targets).
 ### Also available
 
 `barracks disband <name>` deletes a loadout definition, refusing while it is still
-deployed or garrisoned here. `barracks targets` lists the agents barracks can deploy to and
-marks the ones this repository is already set up for.
+deployed or garrisoned here - to empty a loadout without deleting it, strip its sources
+instead. `barracks targets` lists the agents barracks can deploy to and marks the ones this
+repository is already set up for.
 
 ---
 
@@ -452,8 +538,8 @@ marks the ones this repository is already set up for.
 
 Fetching a source can take a while, and a blinking cursor cannot tell you whether barracks
 is working, stuck, or waiting for a passphrase. So anything that has to reach the network -
-`equip`, `upgrade`, and the first `spawn`, `garrison` or `run` that has to populate the
-store rather than reuse it - says what it is doing while it does it.
+`equip`, `upgrade`, and the first `spawn`, `garrison`, `strip` or `run` that has to populate
+the store rather than reuse it - says what it is doing while it does it.
 
 ```
 ✓ github.com/obra/superpowers    resolved 7b2e4d1  3s
@@ -492,9 +578,9 @@ both: the flag has always meant both, and the variable is just the standing form
 
 ## Voice
 
-`train`, `equip`, `spawn`, `recall`, `upgrade`, `garrison` and `run` each sign off with one
-short line from the unit that just took the order. Ask for the same thing again and again
-and it gets progressively more put-upon; leave it alone for a while and it greets you
+`train`, `equip`, `strip`, `spawn`, `recall`, `upgrade`, `garrison` and `run` each sign off
+with one short line from the unit that just took the order. Ask for the same thing again and
+again and it gets progressively more put-upon; leave it alone for a while and it greets you
 fresh. Asking somewhere else does not count as asking again: `spawn frontend` in a second
 repository is a first spawn there, and starts over.
 
@@ -638,9 +724,15 @@ repository it belongs to:
 
 ```
 your-repo/
-├── barracks.lock       # generated: sources, commits, and a digest per vendored file
+├── barracks.lock       # generated: identity, sources, commits, and a digest per vendored file
 └── .claude/skills/     # real, committed skill directories
 ```
+
+Each entry is keyed on the loadout's **stable identity**, not on its name, so
+[renaming](#barracks-rename-loadout-new-name) a loadout cannot orphan a garrison in a checkout
+barracks will never see. Entries written before identities existed carry none and are matched
+by name, exactly as they always were; `version:` at the top of the file is what tells a future
+format change apart from this one.
 
 `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are honoured when set; `BARRACKS_HOME` overrides
 everything.

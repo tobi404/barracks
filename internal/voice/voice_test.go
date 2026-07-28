@@ -21,8 +21,8 @@ func newSpeaker(t *testing.T, now *time.Time, pick uint64) *Speaker {
 // TestSilentCommandsHaveNoPool is the whole "which commands speak" rule: a
 // command speaks because it has a pool, and the data-only commands have none.
 func TestSilentCommandsHaveNoPool(t *testing.T) {
-	speaks := []string{"train", "equip", "spawn", "recall", "upgrade", "garrison", "run"}
-	silent := []string{"list", "deployed", "inspect", "targets", "assign", "disband", "barracks", ""}
+	speaks := []string{"train", "equip", "strip", "spawn", "recall", "upgrade", "garrison", "run"}
+	silent := []string{"list", "deployed", "inspect", "targets", "assign", "disband", "rename", "barracks", ""}
 
 	for _, c := range speaks {
 		if !Speaks(c) {

@@ -41,6 +41,12 @@ var pools = map[string][]step{
 		{"...the pack is heavy.", "Loaded up once more.", "Little room left."},
 		{"Hands are full!", "No more crates.", "The straps are creaking."},
 	},
+	"strip": {
+		{"Kit returned.", "Handed back.", "Lighter on the march."},
+		{"Back to the stores.", "More to hand back.", "The quartermaster tallies."},
+		{"...the pack empties.", "Fewer straps to buckle.", "Lighter again, then."},
+		{"Nothing left to carry!", "Enough taken back!", "Hand it all back, then!"},
+	},
 	"spawn": {
 		{"Off to the front.", "Moving out.", "Taking position."},
 		{"The same front again.", "Marching out once more.", "Boots are on the ground."},

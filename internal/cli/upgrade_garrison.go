@@ -60,7 +60,7 @@ func (e *Env) planGarrisonUpgrades(ctx context.Context, plans []*upgrade.Loadout
 
 	var out []*garrisonStage
 	for _, p := range plans {
-		g := m.Find(p.Name)
+		g := m.FindFor(p.Next.ID, p.Name)
 		if g == nil {
 			continue
 		}

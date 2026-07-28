@@ -24,6 +24,21 @@ func (e *Env) scopeOf(ctx context.Context, global bool) (spawn.Location, error) 
 	return e.engine.Resolve(ctx, spawn.Request{Target: target.Default(), Global: global, Cwd: e.Cwd})
 }
 
+// repoHere is the repository this invocation is standing in, and whether there
+// is one at all.
+//
+// Failing to resolve the location and not being inside a repository are the same
+// answer to every committed-tier question: there is no lockfile to consider, so
+// there is nothing to do. Callers that must distinguish the two use repoScope,
+// which refuses instead.
+func (e *Env) repoHere(ctx context.Context) (spawn.Location, bool) {
+	loc, err := e.scopeOf(ctx, false)
+	if err != nil || loc.Root == "" {
+		return spawn.Location{}, false
+	}
+	return loc, true
+}
+
 // selectTargets decides which agents this invocation installs into.
 //
 // The flag wins over the loadout's declaration, which wins over what is already

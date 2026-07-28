@@ -36,16 +36,16 @@ func (r *Report) Foreign() bool { return len(r.Kept) > 0 }
 // Unlike an update, removal does not offer to override this. There is nothing to
 // keep coherent afterwards: an edited file that stays behind is simply a file the
 // repository still has, and the lockfile no longer claims it.
-func (e *Engine) Remove(root, name string) (*Report, error) {
+func (e *Engine) Remove(root string, ref Ref) (*Report, error) {
 	m, err := Load(root)
 	if err != nil {
 		return nil, err
 	}
-	g := m.Find(name)
+	g := m.FindFor(ref.ID, ref.Loadout)
 	if g == nil {
-		return nil, fmt.Errorf("%w: %s", ErrNotGarrisoned, name)
+		return nil, fmt.Errorf("%w: %s", ErrNotGarrisoned, ref.Loadout)
 	}
-	rep := &Report{Loadout: name}
+	rep := &Report{Loadout: g.Loadout}
 
 	for _, s := range g.Skills {
 		for _, f := range s.Files {
@@ -72,13 +72,16 @@ func (e *Engine) Remove(root, name string) (*Report, error) {
 	// The skill directories and the directories barracks had to create to reach
 	// them, deepest first so children go before parents. Each is only ever
 	// removed while empty, so a kept file - or anything the user put there -
-	// holds its directory open.
-	known := knownPaths(g)
+	// holds its directory open, and is reported rather than passed over.
+	pr := newPruner(root, knownPaths(g), e.claimedByOthers(root, m, g))
 	for _, rel := range deepestFirst(dedupe(append(skillDirs(g), g.Dirs...))) {
-		e.pruneDir(root, rel, known, rep)
+		pr.prune(rel)
+	}
+	for _, child := range pr.foreign() {
+		rep.Kept = append(rep.Kept, lease.Kept{Path: child, Reason: "barracks has no record of putting it there"})
 	}
 
-	m.Drop(name)
+	m.Drop(g.ID, g.Loadout)
 	if err := m.Save(root); err != nil {
 		rep.Errors = append(rep.Errors, fmt.Errorf("update %s: %w", LockName, err))
 		return rep, nil
@@ -87,30 +90,42 @@ func (e *Engine) Remove(root, name string) (*Report, error) {
 	return rep, nil
 }
 
-// pruneDir removes a directory the garrison recorded, but only while empty.
+// claimedByOthers is every path another barracks record accounts for in this
+// repository: the other garrisons in the lockfile, and the leases of any
+// personal spawn deployed here.
 //
-// A directory left standing is not itself worth reporting - the kept file that
-// holds it open already was. What is worth reporting is anything inside it that
-// the lockfile has no record of at all: barracks is leaving somebody's file
-// behind, and that must never be something the user has to discover for
-// themselves.
-func (e *Engine) pruneDir(root, rel string, known map[string]bool, rep *Report) {
-	abs := filepath.Join(root, filepath.FromSlash(rel))
-	entries, err := os.ReadDir(abs)
-	if err != nil {
-		return // absent, or not a directory any more; neither is ours to fix
-	}
-	if len(entries) == 0 {
-		_ = os.Remove(abs)
-		return
-	}
-	for _, ent := range entries {
-		child := rel + "/" + ent.Name()
-		if known[child] {
+// The same two records claimedDirs consults, asked for the same reason. Both
+// tiers legitimately share a parent directory, so a removal walking one has to
+// be able to tell the other record's files from a file of the user's - the
+// report says barracks has no record of putting it there, and that has to be
+// true.
+func (e *Engine) claimedByOthers(root string, m *Manifest, mine *Garrison) map[string]bool {
+	out := map[string]bool{}
+	for i := range m.Garrisons {
+		other := &m.Garrisons[i]
+		if other == mine {
 			continue
 		}
-		rep.Kept = append(rep.Kept, lease.Kept{Path: child, Reason: "barracks has no record of putting it there"})
+		for rel := range knownPaths(other) {
+			out[rel] = true
+		}
 	}
+	if e.Leases != nil {
+		leases, _ := e.Leases.List()
+		for _, l := range lease.FindInScope(leases, lease.ScopeRepo, root) {
+			for _, link := range l.Links {
+				if rel, err := relDir(root, link.Path); err == nil {
+					out[rel] = true
+				}
+			}
+			for _, d := range l.CreatedDirs {
+				if rel, err := relDir(root, d); err == nil {
+					out[rel] = true
+				}
+			}
+		}
+	}
+	return out
 }
 
 // knownPaths is every path this garrison recorded: its files, its skill

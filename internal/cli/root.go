@@ -76,6 +76,8 @@ versions with no barracks installed.
 	root.AddCommand(
 		newTrainCmd(env),
 		newEquipCmd(env),
+		newStripCmd(env),
+		newRenameCmd(env),
 		newListCmd(env),
 		newSpawnCmd(env),
 		newUpgradeCmd(env),

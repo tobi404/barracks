@@ -28,7 +28,11 @@ type writePlan struct {
 	dirs []string // repo-relative directories that must be created
 	// prune are directories of skills this install drops, removed once their
 	// files are gone and only while they are empty.
-	prune     []string
+	prune []string
+	// known is every repo-relative path some lockfile record accounts for,
+	// before or after this install. Pruning reports whatever else it finds
+	// holding a dropped directory open.
+	known     map[string]bool
 	wrote     []string
 	deleted   []string
 	unchanged []string
@@ -171,7 +175,33 @@ func planWrite(req Request, prev *Garrison, next Garrison, places []placement) (
 	// gone. Leaving an empty .claude/skills/css there would make the update's
 	// diff say a skill was removed while the tree still showed it.
 	plan.prune = droppedDirs(prev, next)
+	plan.known = knownUnder(prev, next)
 	return plan, nil
+}
+
+// knownUnder is every path some record accounts for, the one this install
+// replaces and the one it writes. Anything else found inside a dropped skill's
+// directory belongs to somebody, and pruning says so rather than passing over it.
+func knownUnder(prev *Garrison, next Garrison) map[string]bool {
+	out := map[string]bool{}
+	for rel := range recordedFiles(prev) {
+		out[rel] = true
+	}
+	if prev != nil {
+		for _, s := range prev.Skills {
+			out[s.Dir] = true
+		}
+		for _, d := range prev.Dirs {
+			out[d] = true
+		}
+	}
+	for _, s := range next.Skills {
+		out[s.Dir] = true
+		for _, f := range s.Files {
+			out[s.Dir+"/"+f.Path] = true
+		}
+	}
+	return out
 }
 
 // droppedDirs is the skill directories the previous garrison had that this one
@@ -374,8 +404,20 @@ func (p *writePlan) apply(root string) error {
 
 	// Only while empty, as everywhere else: anything the user left in a dropped
 	// skill's directory holds it open, and that is the right outcome.
+	//
+	// The directory standing is not itself worth reporting - a kept file already
+	// was. What is worth reporting is a file no record accounts for: barracks is
+	// leaving somebody's work behind inside a directory it used to manage, and
+	// that must never be something the user has to find out for themselves.
+	// Remove obeys exactly this rule when a whole garrison goes; a skill dropped
+	// from one is the same event, one directory at a time, so both go through
+	// one pruner.
+	pr := newPruner(root, p.known, nil)
 	for _, rel := range p.prune {
-		_ = os.Remove(filepath.Join(root, filepath.FromSlash(rel)))
+		pr.prune(rel)
+	}
+	for _, child := range pr.foreign() {
+		p.notices = append(p.notices, "left in place: "+child+" - barracks has no record of putting it there")
 	}
 	return nil
 }

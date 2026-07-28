@@ -399,3 +399,209 @@ func TestTargetsSurviveARoundTrip(t *testing.T) {
 		t.Errorf("a loadout declaring no targets wrote a targets key:\n%s", b)
 	}
 }
+
+// TestIdentityIsMintedOnceAndSurvivesEverything: the identity is what a
+// committed lockfile keys on, so it has to be stable across reads and saves and
+// deliberately unrelated to the name.
+func TestIdentityIsMintedOnceAndSurvivesEverything(t *testing.T) {
+	s := newStore(t)
+	a, err := s.Create("frontend", "", testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.ID == "" {
+		t.Fatal("Create minted no identity")
+	}
+
+	b, err := s.Create("backend", "", testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.ID == a.ID {
+		t.Errorf("two loadouts share the identity %q", a.ID)
+	}
+
+	// Reading it back, and saving it again, must not move it.
+	for i := 0; i < 3; i++ {
+		got, err := s.Get("frontend")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ID != a.ID {
+			t.Fatalf("read %d gave identity %q, want %q", i, got.ID, a.ID)
+		}
+		if err := s.Save(got); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestALoadoutWrittenBeforeIdentitiesGetsOneOnRead is the migration path for a
+// definition already on disk. It must be given an identity exactly once, and the
+// same one every time after that.
+func TestALoadoutWrittenBeforeIdentitiesGetsOneOnRead(t *testing.T) {
+	s := newStore(t)
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := "name: legacy\ncreated_at: 2026-01-01T00:00:00Z\nequipment: []\n"
+	if err := os.WriteFile(filepath.Join(s.Dir, "legacy.yaml"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := s.Get("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == "" {
+		t.Fatal("a pre-identity definition was not given one")
+	}
+	second, err := s.Get("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID {
+		t.Errorf("the backfilled identity moved between reads: %q then %q", first.ID, second.ID)
+	}
+	// It has to be on disk, not only in memory: a lockfile stamped with an
+	// identity nothing else remembers could never be matched again.
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "legacy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), first.ID) {
+		t.Errorf("the identity was not persisted:\n%s", raw)
+	}
+}
+
+// TestRenameKeepsTheIdentityAndRefusesAnExistingName.
+func TestRenameKeepsTheIdentityAndRefusesAnExistingName(t *testing.T) {
+	s := newStore(t)
+	l, err := s.Create("frontend", "web skills", testTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create("taken", "", testTime); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Rename("frontend", "taken"); !errors.Is(err, ErrExists) {
+		t.Fatalf("rename onto an existing name = %v, want ErrExists", err)
+	}
+	for _, name := range []string{"frontend", "taken"} {
+		if _, err := s.Get(name); err != nil {
+			t.Errorf("%s did not survive a refused rename: %v", name, err)
+		}
+	}
+
+	renamed, err := s.Rename("frontend", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.ID != l.ID {
+		t.Errorf("identity changed with the name: %q -> %q", l.ID, renamed.ID)
+	}
+	if renamed.Description != "web skills" {
+		t.Errorf("description lost: %q", renamed.Description)
+	}
+	if _, err := s.Get("frontend"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the old definition survived: %v", err)
+	}
+	got, err := s.Get("web")
+	if err != nil || got.Name != "web" || got.ID != l.ID {
+		t.Errorf("renamed definition = %+v, %v", got, err)
+	}
+	// Exactly one definition answers to this loadout afterwards.
+	all, problems := s.List()
+	if len(problems) != 0 || len(all) != 2 {
+		t.Errorf("store holds %d loadouts (%v), want frontend gone and web + taken", len(all), problems)
+	}
+}
+
+// TestFindResolvesASourceSpellingOrRefuses: removal never guesses which entry a
+// spelling meant.
+func TestFindResolvesASourceSpellingOrRefuses(t *testing.T) {
+	repo := testutil.NewSkillRepo(t, filepath.Join(t.TempDir(), "src"), testutil.Skill{Path: "skills/react"})
+	parse := func(raw string) source.Source {
+		t.Helper()
+		src, err := source.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return src
+	}
+
+	l := &Loadout{Name: "frontend"}
+	l.Equip(Equipment{Source: parse(repo.Dir + "#main:skills"), Commit: "aaa"})
+	l.Equip(Equipment{Source: parse(repo.Dir + "#v2:skills"), Commit: "bbb"})
+	l.Equip(Equipment{Source: parse("gh:owner/other"), Commit: "ccc"})
+	// As `upgrade --pin` leaves a source: a declared ref nobody ever typed.
+	l.Equip(Equipment{Source: parse("gh:owner/pinned#0123456789abcdef0123456789abcdef01234567:pkg"), Commit: "ddd"})
+
+	if i, err := l.Find(parse(repo.Dir + "#v2:skills")); err != nil || i != 1 {
+		t.Errorf("exact ident = %d, %v; want entry 1", i, err)
+	}
+	// The ref is the first part dropped, precisely because --pin owns it.
+	if i, err := l.Find(parse("gh:owner/pinned#main:pkg")); err != nil || i != 3 {
+		t.Errorf("a pinned source found by its original ref = %d, %v; want entry 3", i, err)
+	}
+	if i, err := l.Find(parse("gh:owner/other")); err != nil || i != 2 {
+		t.Errorf("shorthand = %d, %v; want entry 2", i, err)
+	}
+
+	// A spelling covering two entries is refused, and both are named.
+	_, err := l.Find(parse(repo.Dir))
+	if !errors.Is(err, ErrAmbiguousSource) {
+		t.Fatalf("ambiguous spelling = %v, want ErrAmbiguousSource", err)
+	}
+	for _, want := range []string{"#main:skills", "#v2:skills"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, err)
+		}
+	}
+
+	// A subpath that was typed and matches nothing is not widened away: giving
+	// back the source the user did not name would be the worst kind of helpful.
+	if _, err := l.Find(parse(repo.Dir + "#main:nowhere")); !errors.Is(err, ErrNoSuchSource) {
+		t.Errorf("a subpath that is not equipped = %v, want ErrNoSuchSource", err)
+	}
+	if _, err := l.Find(parse("gh:nobody/nothing")); !errors.Is(err, ErrNoSuchSource) {
+		t.Errorf("an unequipped source = %v, want ErrNoSuchSource", err)
+	}
+	if _, err := (&Loadout{Name: "empty"}).Find(parse("gh:owner/x")); !errors.Is(err, ErrNoSuchSource) {
+		t.Errorf("an empty loadout = %v, want ErrNoSuchSource", err)
+	}
+}
+
+// TestStripDetachesOneEntryAndLeavesTheRest.
+func TestStripDetachesOneEntryAndLeavesTheRest(t *testing.T) {
+	src := func(raw string) source.Source {
+		t.Helper()
+		s, err := source.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	l := &Loadout{Name: "frontend"}
+	l.Equip(Equipment{Source: src("gh:owner/a"), Commit: "aaa", Skills: []string{"react"}})
+	l.Equip(Equipment{Source: src("gh:owner/b"), Commit: "bbb", Skills: []string{"css"}})
+	l.Equip(Equipment{Source: src("gh:owner/c"), Commit: "ccc", Skills: []string{"hooks"}})
+
+	dropped := l.Strip(1)
+	if dropped.Ident() != "github.com/owner/b" {
+		t.Errorf("dropped %q", dropped.Ident())
+	}
+	if got := strings.Join(l.Idents(), ","); got != "github.com/owner/a,github.com/owner/c" {
+		t.Errorf("kept %q", got)
+	}
+	if l.SkillCount() != 2 {
+		t.Errorf("skill count = %d, want 2", l.SkillCount())
+	}
+	// Down to nothing is a legitimate state, not an error.
+	l.Strip(0)
+	l.Strip(0)
+	if len(l.Equipment) != 0 {
+		t.Errorf("%d entries left", len(l.Equipment))
+	}
+}

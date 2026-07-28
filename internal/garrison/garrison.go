@@ -66,8 +66,12 @@ type Request struct {
 	// GitDir is the repository's .git directory, used only to check that the
 	// files being committed are not ignored.
 	GitDir string
-	// Name is the loadout's name, the key the lockfile records it under.
+	// Name is the loadout's name, the label the lockfile records it under.
 	Name string
+	// ID is the loadout's stable identity, and the real key. Empty when the
+	// caller has none - a repair driven from a lockfile written before
+	// identities existed - which matches by name exactly as it always did.
+	ID string
 	// Equipment is what to materialise. It comes from a loadout definition
 	// normally, and from the lockfile itself when repairing a checkout.
 	Equipment []loadout.Equipment
@@ -128,7 +132,7 @@ func (e *Engine) Install(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	prev := m.Find(req.Name)
+	prev := m.FindFor(req.ID, req.Name)
 
 	res := &Result{Loadout: req.Name, Targets: idsOf(req.Targets), New: prev == nil}
 
@@ -144,6 +148,13 @@ func (e *Engine) Install(ctx context.Context, req Request) (*Result, error) {
 	}
 	res.Notices = append(res.Notices, notices...)
 
+	// An identity is only ever added, never dropped: a repair run from a lockfile
+	// alone carries none, and taking the recorded one away would undo the very
+	// thing that lets the entry survive the next rename.
+	if next.ID == "" && prev != nil {
+		next.ID = prev.ID
+	}
+
 	if err := e.checkForeign(req, prev, next); err != nil {
 		return nil, err
 	}
@@ -152,11 +163,13 @@ func (e *Engine) Install(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 	plan.dirs = inheritDirs(plan.dirs, e.claimedDirs(req, prev), next.Skills)
-	res.Notices = append(res.Notices, plan.notices...)
 
 	if err := plan.apply(req.Root); err != nil {
 		return nil, err
 	}
+	// Read after the write, not before: pruning a dropped skill's directory only
+	// finds out what is holding it open once its own files have gone.
+	res.Notices = append(res.Notices, plan.notices...)
 
 	next.Dirs = plan.dirs
 	// A run that changes nothing must leave the lockfile byte-identical. A
@@ -230,6 +243,7 @@ func (e *Engine) resolve(ctx context.Context, req Request) ([]placement, int, er
 func (e *Engine) compose(req Request, places []placement) (Garrison, []string, error) {
 	g := Garrison{
 		Loadout:   req.Name,
+		ID:        req.ID,
 		Targets:   idsOf(req.Targets),
 		UpdatedAt: e.now().UTC().Truncate(time.Second),
 	}
@@ -313,9 +327,13 @@ func (e *Engine) checkForeign(req Request, prev *Garrison, next Garrison) error 
 	if err != nil {
 		return err
 	}
+	// Every garrison but this loadout's own, found the same way Install found it:
+	// by identity where there is one. Skipping by name alone would let a renamed
+	// loadout's own committed files be reported as another loadout's.
+	mine := m.FindFor(req.ID, req.Name)
 	for i := range m.Garrisons {
 		other := &m.Garrisons[i]
-		if other.Loadout == req.Name {
+		if other == mine {
 			continue
 		}
 		for _, d := range dirs {
@@ -358,8 +376,9 @@ func (e *Engine) claimedDirs(req Request, prev *Garrison) [][]string {
 		out = append(out, prev.Dirs)
 	}
 	if m, err := Load(req.Root); err == nil {
+		mine := m.FindFor(req.ID, req.Name)
 		for i := range m.Garrisons {
-			if m.Garrisons[i].Loadout == req.Name {
+			if &m.Garrisons[i] == mine {
 				continue
 			}
 			out = append(out, m.Garrisons[i].Dirs)
@@ -435,6 +454,7 @@ func (e *Engine) Restore(ctx context.Context, root, gitDir string, only []string
 			Root:      root,
 			GitDir:    gitDir,
 			Name:      g.Loadout,
+			ID:        g.ID,
 			Equipment: g.Equipment(),
 			Targets:   targets,
 			Force:     force,
@@ -461,7 +481,7 @@ func (e *Engine) Reinstall(ctx context.Context, root, gitDir string, l *loadout.
 	if err != nil {
 		return nil, err
 	}
-	g := m.Find(l.Name)
+	g := m.FindFor(l.ID, l.Name)
 	if g == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotGarrisoned, l.Name)
 	}
@@ -473,24 +493,42 @@ func (e *Engine) Reinstall(ctx context.Context, root, gitDir string, l *loadout.
 		Root:      root,
 		GitDir:    gitDir,
 		Name:      l.Name,
+		ID:        l.ID,
 		Equipment: l.Equipment,
 		Targets:   targets,
 		Force:     force,
 	})
 }
 
-// Garrisoned lists the loadouts the repository's lockfile records.
-func Garrisoned(root string) ([]string, error) {
+// Ref names one garrison in a lockfile: the identity it is keyed on, and the
+// display name recorded beside it.
+//
+// Commands that act on what a repository has - a recall, a rename - work from
+// this rather than from a bare name, so a lockfile written under an older name
+// is still acted on as the loadout it is.
+type Ref struct {
+	ID      string
+	Loadout string
+}
+
+// Garrisoned lists the garrisons the repository's lockfile records, name-sorted.
+func Garrisoned(root string) ([]Ref, error) {
 	m, err := Load(root)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, len(m.Garrisons))
+	return m.Refs(), nil
+}
+
+// Refs names every garrison this manifest holds, name-sorted, so a caller that
+// has already loaded the lockfile never reads it a second time to ask.
+func (m *Manifest) Refs() []Ref {
+	out := make([]Ref, 0, len(m.Garrisons))
 	for _, g := range m.Garrisons {
-		out = append(out, g.Loadout)
+		out = append(out, Ref{ID: g.ID, Loadout: g.Loadout})
 	}
-	sort.Strings(out)
-	return out, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Loadout < out[j].Loadout })
+	return out
 }
 
 // Guard answers whether a repository's committed tier claims a path.
