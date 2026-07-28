@@ -196,6 +196,7 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	l := &lease.Lease{
+		Version:   lease.FormatVersion,
 		ID:        lease.NewID(),
 		Loadout:   req.Loadout.Name,
 		Target:    req.Target.ID,
@@ -205,6 +206,7 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 		Kind:      req.Kind,
 		CreatedAt: e.now().UTC(),
 		Owner:     req.Owner,
+		Sources:   provenance(req.Loadout),
 	}
 	if l.Kind == "" {
 		l.Kind = lease.KindManual
@@ -328,6 +330,31 @@ func (e *Engine) SpawnAll(ctx context.Context, req Request, targets []target.Tar
 		done = append(done, res)
 	}
 	return done, nil
+}
+
+// provenance records every source the loadout declared at spawn time, whether
+// or not it contributed a skill.
+//
+// A source that happens to export nothing today is still one this spawn was
+// made from, and recording it is what lets a later upgrade attach its skills
+// when they appear. A source equipped *after* this call is deliberately not
+// added to the record. That keeps out one at a repository or subpath this
+// spawn was never made from, but not a second ref of a repository and subpath
+// already recorded here - matching ignores the ref. README.md and carries in
+// internal/upgrade hold that rule and the reason it is ref-blind.
+func provenance(l *loadout.Loadout) []lease.SourceRef {
+	if len(l.Equipment) == 0 {
+		return nil
+	}
+	out := make([]lease.SourceRef, 0, len(l.Equipment))
+	for _, eq := range l.Equipment {
+		out = append(out, lease.SourceRef{
+			Ident:   eq.Ident(),
+			Key:     eq.RepoKey(),
+			Subpath: eq.Subpath,
+		})
+	}
+	return out
 }
 
 // unwinder undoes a partially completed spawn.

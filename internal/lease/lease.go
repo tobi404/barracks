@@ -55,6 +55,42 @@ type Owner struct {
 	Command    string `yaml:"command,omitempty"`
 }
 
+// FormatVersion is the lease record format this build writes. Version 1 is the
+// original record and is written without the field at all, so a lease loaded
+// with Version 0 is a version-1 record.
+//
+// Nothing may ask whether a record is *current*; bumping this for one new field
+// would then declare every other field missing from every record on disk. A
+// reader asks whether a record is new enough to carry the field it wants, by
+// comparing against the version that field landed in - provenanceSince below,
+// and one such constant per field added from here on.
+const FormatVersion = 2
+
+// provenanceSince is the record version Lease.Sources was introduced in. It is
+// deliberately not FormatVersion: the two are equal today and must be free to
+// diverge the moment an unrelated field bumps the format.
+const provenanceSince = 2
+
+// SourceRef records one source a spawn was materialised from.
+//
+// It is provenance, not an undo record: Links remains the complete list of
+// paths barracks created and the only thing revocation acts on. This exists
+// because the links are also the only evidence that a spawn belongs to a
+// source, and a source that momentarily exports no skills destroys that
+// evidence - after which nothing could ever re-attach it.
+//
+// Key and Subpath are what a lookup matches on, because `upgrade --pin`
+// rewrites a source's ref and therefore its Ident. Ident is kept as the label a
+// human reads, and is refreshed whenever the definition changes underneath it.
+type SourceRef struct {
+	// Ident is the human label, e.g. "github.com/tobi404/skills#main:skills".
+	Ident string `yaml:"ident,omitempty"`
+	// Key is the repository identity: host/owner/repo.
+	Key string `yaml:"key"`
+	// Subpath restricts the source to a directory inside the repository.
+	Subpath string `yaml:"subpath,omitempty"`
+}
+
 // Link is one symlink barracks created.
 type Link struct {
 	// Path is the symlink inside the target directory.
@@ -69,6 +105,9 @@ type Link struct {
 
 // Lease is one live spawn.
 type Lease struct {
+	// Version is the record format. Absent means version 1, written before
+	// Sources existed.
+	Version   int        `yaml:"version,omitempty"`
 	ID        string     `yaml:"id"`
 	Loadout   string     `yaml:"loadout"`
 	Target    string     `yaml:"target"`
@@ -81,11 +120,25 @@ type Lease struct {
 	Owner     *Owner     `yaml:"owner,omitempty"`
 
 	Links []Link `yaml:"links"`
+	// Sources are the sources this spawn was materialised from, independently of
+	// which of them still contribute a link. Empty on a record older than
+	// provenanceSince, which is not the same as "carries nothing" - see
+	// HasProvenance.
+	Sources []SourceRef `yaml:"sources,omitempty"`
 	// CreatedDirs are directories barracks made and may remove if they end up
 	// empty again. Deepest last.
 	CreatedDirs []string           `yaml:"created_dirs,omitempty"`
 	Exclude     *gitexclude.Record `yaml:"exclude,omitempty"`
 }
+
+// HasProvenance reports whether Sources can be trusted as the complete set of
+// sources this spawn was made from.
+//
+// A record older than provenanceSince has no Sources field, and reading its
+// absence as an empty set would say the spawn came from nothing. Callers must
+// fall back to whatever they did before - for upgrade, inspecting the links -
+// rather than act on it.
+func (l *Lease) HasProvenance() bool { return l.Version >= provenanceSince }
 
 // NewID mints a random lease ID.
 func NewID() string {

@@ -79,13 +79,35 @@ func Revoke(l *Lease, guard StoreGuard, store *Store, reason string) *Report {
 	return rep
 }
 
-func revokeLink(link Link, guard StoreGuard) (removed bool, kept *Kept) {
+// LinkState is what a recorded link looks like on disk right now.
+type LinkState int
+
+const (
+	// LinkOurs is still exactly the symlink barracks created: a symlink,
+	// pointing at the recorded store directory, and that directory is inside
+	// the store. This is the only state barracks may act on.
+	LinkOurs LinkState = iota
+	// LinkGone means nothing is there any more.
+	LinkGone
+	// LinkForeign means something else is there. It is never touched.
+	LinkForeign
+)
+
+// InspectLink classifies a recorded link without changing anything.
+//
+// Every operation that removes or replaces a spawned path goes through here
+// first, so the rule barracks must never break lives in exactly one function:
+// a recorded path is acted on only if it is still a symlink AND still points at
+// the exact store directory the lease says it does. A real file, a directory,
+// or a symlink aimed somewhere else is left untouched and reported. That is
+// what makes a user's own .claude/skills/my-skill impossible to destroy.
+func InspectLink(link Link, guard StoreGuard) (LinkState, *Kept) {
 	fi, err := os.Lstat(link.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil // already gone; nothing to do and nothing to report
+			return LinkGone, nil // nothing to do and nothing to report
 		}
-		return false, &Kept{Path: link.Path, Reason: "cannot inspect: " + err.Error()}
+		return LinkForeign, &Kept{Path: link.Path, Reason: "cannot inspect: " + err.Error()}
 	}
 
 	if fi.Mode()&os.ModeSymlink == 0 {
@@ -93,23 +115,44 @@ func revokeLink(link Link, guard StoreGuard) (removed bool, kept *Kept) {
 		if fi.IsDir() {
 			what = "a real directory"
 		}
-		return false, &Kept{Path: link.Path, Reason: "not a barracks symlink any more - it is " + what}
+		return LinkForeign, &Kept{Path: link.Path, Reason: "not a barracks symlink any more - it is " + what}
 	}
 
 	dest, err := os.Readlink(link.Path)
 	if err != nil {
-		return false, &Kept{Path: link.Path, Reason: "cannot read symlink: " + err.Error()}
+		return LinkForeign, &Kept{Path: link.Path, Reason: "cannot read symlink: " + err.Error()}
 	}
 	if !filepath.IsAbs(dest) {
 		dest = filepath.Join(filepath.Dir(link.Path), dest)
 	}
 	if filepath.Clean(dest) != filepath.Clean(link.Target) {
-		return false, &Kept{Path: link.Path, Reason: "symlink now points at " + dest}
+		return LinkForeign, &Kept{Path: link.Path, Reason: "symlink now points at " + dest}
 	}
 	if guard != nil && !guard.Contains(dest) {
-		return false, &Kept{Path: link.Path, Reason: "symlink resolves outside the barracks store"}
+		return LinkForeign, &Kept{Path: link.Path, Reason: "symlink resolves outside the barracks store"}
 	}
+	return LinkOurs, nil
+}
 
+// SymlinkPointsAt reports whether path is right now a symlink pointing at
+// exactly target.
+//
+// It answers identity and nothing else, deliberately without a StoreGuard, and
+// exists for callers deciding what to RECORD - reconciling a lease against the
+// paths an upgrade actually produced, say. Anything deciding what to remove or
+// replace must call InspectLink with the store guard instead: that extra check
+// is what stops barracks acting on a symlink resolving outside its own store,
+// and no mutation path may reach for the cheaper answer here.
+func SymlinkPointsAt(path, target string) bool {
+	state, _ := InspectLink(Link{Path: path, Target: target}, nil)
+	return state == LinkOurs
+}
+
+func revokeLink(link Link, guard StoreGuard) (removed bool, kept *Kept) {
+	state, k := InspectLink(link, guard)
+	if state != LinkOurs {
+		return false, k
+	}
 	if err := os.Remove(link.Path); err != nil {
 		return false, &Kept{Path: link.Path, Reason: "remove failed: " + err.Error()}
 	}

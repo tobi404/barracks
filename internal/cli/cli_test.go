@@ -701,7 +701,7 @@ func TestHelpUsesTheRTSVocabulary(t *testing.T) {
 	h := newHarness(t)
 
 	root := h.mustRun("--help")
-	for _, want := range []string{"train", "equip", "spawn", "recall", "deployed", "list", "run", "assign", "targets"} {
+	for _, want := range []string{"train", "equip", "spawn", "upgrade", "recall", "deployed", "list", "run", "assign", "targets"} {
 		if !strings.Contains(root, want) {
 			t.Errorf("root help does not mention %q:\n%s", want, root)
 		}
@@ -714,6 +714,7 @@ func TestHelpUsesTheRTSVocabulary(t *testing.T) {
 		{"train", []string{"loadout", "bundle of agent skills", "barracks train"}},
 		{"equip", []string{"git source", "SKILL.md", "gh:owner/repo", "--only"}},
 		{"spawn", []string{"symlinked", ".git/info/exclude", "--for", "--global"}},
+		{"upgrade", []string{"declared ref", "--dry-run", "--pin", "left alone and reported", "keeps the skills it started with"}},
 		{"recall", []string{"exactly as it was", "barracks store", "left alone and reported"}},
 		{"deployed", []string{"deployed in this repo", "reaps expired leases"}},
 		{"list", []string{"loadout", "barracks list"}},

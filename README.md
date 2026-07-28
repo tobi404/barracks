@@ -25,6 +25,7 @@ barracks run frontend -- claude                            # or just for one ses
 |---|---|
 | Install it | [Install](#install) |
 | Learn the commands | [Commands](#commands) |
+| Keep skills up to date | [`barracks upgrade`](#barracks-upgrade-loadout) |
 | Understand source syntax | [Source syntax](#source-syntax) |
 | Know what it touches on disk | [What it does to your repo](#what-it-does-to-your-repo) |
 | See which agents are supported | [Targets](#targets) |
@@ -138,7 +139,8 @@ repo rather than all of them.
 
 Equipping a source a loadout already has re-pins it to the newly resolved commit instead of
 attaching a second copy. A different `#ref` or subpath is a different source and is kept
-alongside.
+alongside. To move a whole loadout forward later, and every repo it is spawned into with it,
+use [`barracks upgrade`](#barracks-upgrade-loadout).
 
 ### `barracks spawn <loadout>`
 
@@ -157,6 +159,97 @@ A loadout declaring two agents reaches both in this one command. A `--target` gi
 applies to this spawn only and never changes what the loadout declares. If any one target
 fails, the whole spawn is rolled back - a two-agent spawn is one action, so it never half
 happens.
+
+### `barracks upgrade [<loadout>...]`
+
+Re-resolves each source's declared ref, fetches whatever it now points at, and
+relinks every live spawn onto the new commit. With no loadout named, every
+loadout is upgraded.
+
+```bash
+barracks upgrade
+barracks upgrade frontend --dry-run
+barracks upgrade frontend --pin
+```
+
+Each source is reported with its old and new commits and a real per-skill diff:
+
+```
+frontend
+  github.com/owner/skills#main  940f8b38 -> f6183d1c
+    + hooks
+    ~ react
+    - legacy
+    (1 skill unchanged)
+  /home/you/work/.claude/skills  [manual]
+    + hooks
+    - legacy
+    2 skills relinked
+```
+
+`~` means the skill's content changed, established by fingerprinting both
+trees - not merely that the repository commit moved. A commit that leaves every
+skill byte-identical says `no skill changed` rather than claiming an update. A
+source pinned to an exact commit SHA has nothing to resolve and is reported as
+pinned, never silently refetched.
+
+Relinking obeys the same rule as recall: a spawned path is repointed or removed
+only while it is still a symlink into the barracks store. A file or directory of
+your own that has taken its place is left alone and reported. A skill that no
+longer exists upstream has its symlink removed rather than left dangling, and
+new skills are registered in `.git/info/exclude`, so `git status` stays clean
+before and after.
+
+Upgrading moves a spawn forward along the sources it was made from. Membership
+is recorded per **repository and subpath**, never per ref, so re-equipping the
+same repository and subpath at another ref counts as the *same* source and its
+skills do land in a spawn that already exists:
+
+```bash
+barracks equip frontend gh:owner/skills#main:skills
+barracks spawn frontend
+barracks equip frontend gh:owner/skills#v1:skills
+barracks upgrade frontend       # the #v1 entry's skills land in that spawn
+```
+
+A source at a different repository, or at a different subpath of the same
+repository, equipped *after* a repo was spawned into is not materialised there
+by an upgrade - run `barracks spawn` again to pick that one up.
+
+The ref is left out of the match on purpose: `--pin` rewrites a source's
+declared ref, and a ref-sensitive comparison would stop recognising a spawn's
+own source the moment you pinned it, silently skipping every later addition.
+The repository and subpath are the parts `--pin` cannot rewrite.
+
+| Flag | Effect |
+|---|---|
+| `--dry-run` | Report exactly what would change and change nothing |
+| `--pin` | Record the newly resolved commit as the source's declared ref |
+| `--include-running` | Also relink spawns held by a running process |
+
+`--dry-run` resolves and fetches into the shared store, because comparing two
+commits is the only way to tell you what actually changed. It writes nothing
+else: no loadout definition, no symlink, no lease, no exclude file. Store entries
+are content-addressed and shared, so that fetch is invisible and the second run
+reuses it - which is why the dry run's report and the real run's report are the
+same text.
+
+**A running session keeps the skills it started with.** A spawn whose lease is
+held by a live `barracks run` process is not relinked; barracks says so and moves
+on. Changing skill directories underneath a session that has already read them
+is exactly the kind of surprise this tool exists not to produce. The session's
+lease is revoked when it exits, and the next `upgrade` or `spawn` brings that
+directory forward - a skipped spawn is never stranded. Pass `--include-running`
+to relink it now anyway.
+
+barracks skips only what it can *prove* is live. A `manual` or `deadline` spawn
+may well have an agent session sitting on it, and barracks has no way to know,
+so those are relinked. If you are mid-session in a repo with a manual spawn,
+`--dry-run` first.
+
+Old store entries are left behind after an upgrade. Disk is cheap, and deleting
+a commit something might still be pointing at is not a decision to make
+implicitly.
 
 ### `barracks recall <loadout>`
 
@@ -278,6 +371,7 @@ not just its PID, so a recycled PID can never keep a dead lease alive.
 Revoking removes only those paths, and only after confirming each is still a symlink
 resolving into the barracks store. Your own `.claude/skills/my-skill/` is safe, and if
 barracks finds one of its paths taken over it says so rather than failing silently.
+Upgrading applies the same check before it repoints or removes anything.
 
 ### On-disk layout
 
@@ -468,7 +562,8 @@ produce, minus the upload.
 
 ## Not built yet
 
-The committed/shared tier with a lockfile and `barracks upgrade` are separately queued.
+The committed/shared tier with a lockfile and store garbage collection are separately
+queued.
 
 ---
 

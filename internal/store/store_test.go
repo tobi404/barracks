@@ -228,6 +228,53 @@ func TestPath(t *testing.T) {
 	}
 }
 
+// TestLocate is what an upgrade reads a spawned link back with: which commit of
+// a source a store path belongs to, taken from the path rather than from any
+// label recorded beside it.
+func TestLocate(t *testing.T) {
+	root := t.TempDir()
+	st := New(filepath.Join(root, "store"), filepath.Join(root, "mirrors"), gitcmd.Git{})
+	src, err := source.Parse("gh:owner/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := source.Parse("gh:owner/elsewhere")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	entry := st.Path(src, commit)
+
+	tests := []struct {
+		name       string
+		src        source.Source
+		path       string
+		wantCommit string
+		wantRel    string
+		wantOK     bool
+	}{
+		{"a skill inside the entry", src, filepath.Join(entry, "skills", "react"), commit, "skills/react", true},
+		{"the entry itself", src, entry, commit, "", true},
+		{"a different repository", other, filepath.Join(entry, "skills"), "", "", false},
+		{"outside the store", src, filepath.Join(root, "elsewhere"), "", "", false},
+		{"the store root", src, st.Root, "", "", false},
+		{"a repository name that merely shares a prefix", src, filepath.Join(st.Root, "github.com", "owner", "repository@"+commit), "", "", false},
+		// A path shaped like an entry but naming no commit identifies nothing.
+		// Returning "" as a commit would let an upgrade match a link to a source
+		// it cannot possibly have come from.
+		{"an entry with no commit", src, filepath.Join(st.Root, "github.com", "owner", "repo@"), "", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotCommit, gotRel, ok := st.Locate(tt.src, tt.path)
+			if ok != tt.wantOK || gotCommit != tt.wantCommit || gotRel != tt.wantRel {
+				t.Errorf("Locate(%q) = (%q, %q, %v), want (%q, %q, %v)",
+					tt.path, gotCommit, gotRel, ok, tt.wantCommit, tt.wantRel, tt.wantOK)
+			}
+		})
+	}
+}
+
 // TestContains is the guard revocation relies on: nothing outside the store may
 // ever be removed.
 func TestContains(t *testing.T) {
