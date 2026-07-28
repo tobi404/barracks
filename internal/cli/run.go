@@ -112,11 +112,39 @@ outright, the next barracks command reaps the lease.`),
 			code, runErr := env.runChild(argv, leases)
 
 			for _, spawned := range leases {
-				rep := lease.Revoke(spawned, env.store, env.leases, "command exited")
+				// The record can be rewritten while the session runs: `barracks
+				// upgrade --include-running` relinks a live spawn and saves the new
+				// targets. Recalling from the copy captured at spawn time would
+				// compare the relinked symlink against a stale target, refuse to
+				// remove a link barracks itself created, and leave the repository
+				// dirty. So the record is re-read here, at the moment of revoke,
+				// and never any earlier: a rewrite can land at any point until then.
+				rec, confirmed := spawned, true
+				if fresh, err := env.leases.Get(spawned.ID); err == nil {
+					rec = fresh
+				} else {
+					confirmed = false
+					fmt.Fprintf(env.Err, "! could not re-read the lease record: %v\n", err)
+					fmt.Fprintln(env.Err, "! recalling from the copy this session started with, and keeping the record so the next barracks command can finish the job")
+				}
+
+				// Revoking from the captured copy removes nothing it cannot prove:
+				// InspectLink compares against the recorded target, so a stale copy
+				// keeps a path rather than deleting the wrong one. That makes the
+				// fallback safe but possibly incomplete, which is why the record is
+				// not deleted with it - it is the only thing a later reap can
+				// finish the recall from.
+				records := env.leases
+				headline := "left in place (barracks did not create it)"
+				if !confirmed {
+					records = nil
+					headline = "left for the next reap (the lease record could not be re-read, so this path could not be confirmed)"
+				}
+				rep := lease.Revoke(rec, env.store, records, "command exited")
 				fmt.Fprintf(env.Out, "recalled %s from %s (%s, %d %s)\n",
-					spawned.Loadout, spawned.Dir, displayOf(spawned.Target),
+					rec.Loadout, rec.Dir, displayOf(rec.Target),
 					len(rep.Removed), plural(len(rep.Removed), "skill", "skills"))
-				reportKept(env.Err, rep)
+				reportKeptAs(env.Err, rep, headline)
 			}
 
 			if runErr != nil {

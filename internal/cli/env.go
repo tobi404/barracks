@@ -90,8 +90,16 @@ func (e *Env) reap() {
 // reportKept surfaces anything revocation refused to touch. Leaving a foreign
 // path alone must always be visible, never silent.
 func reportKept(w io.Writer, rep *lease.Report) {
+	reportKeptAs(w, rep, "left in place (barracks did not create it)")
+}
+
+// reportKeptAs is reportKept with the headline spelled out, for the one caller
+// that must not claim a kept path is foreign: a recall working from a lease
+// record it could not re-read has kept the path because it cannot confirm it,
+// which is a different statement from "someone else created this".
+func reportKeptAs(w io.Writer, rep *lease.Report, headline string) {
 	for _, k := range rep.Kept {
-		fmt.Fprintf(w, "! left in place (barracks did not create it): %s - %s\n", k.Path, k.Reason)
+		fmt.Fprintf(w, "! %s: %s - %s\n", headline, k.Path, k.Reason)
 	}
 	for _, err := range rep.Errors {
 		fmt.Fprintf(w, "! %v\n", err)
