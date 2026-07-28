@@ -25,9 +25,18 @@ import (
 // spawn recorded the same way.
 //
 // It also reports the skills the loadout still provides once the removal is
-// done, because the answer is a by-product of reading every surviving source's
-// tree and the caller has to know whether anything is left at all.
-func (e *Engine) PlanRemoval(ctx context.Context, next *loadout.Loadout, dropped []loadout.Equipment) (*LoadoutPlan, []string, error) {
+// done, each attributed to the surviving source that provides it - the first
+// one, the same rule planSpawn attributes by, so the source named here is the
+// one a handed-over link ends up pointing into. The answer is a by-product of
+// reading every surviving source's tree, and the caller needs it for more than a
+// count: a skill the dropped source contributed which another still provides is
+// handed over rather than removed, and reporting the two the same way would tell
+// the user their skill is gone when it is not.
+//
+// Deliberately read from the loadout's sources rather than from the spawn plans:
+// the answer has to be the same for a loadout garrisoned but never spawned, or
+// deployed nowhere at all.
+func (e *Engine) PlanRemoval(ctx context.Context, next *loadout.Loadout, dropped []loadout.Equipment) (*LoadoutPlan, map[string]string, error) {
 	p := &LoadoutPlan{Name: next.Name, Next: next, definitionChanged: true}
 
 	var moves []move
@@ -37,8 +46,10 @@ func (e *Engine) PlanRemoval(ctx context.Context, next *loadout.Loadout, dropped
 		if err != nil {
 			return nil, nil, err
 		}
-		for name, path := range mv.skills {
-			remaining[name] = path
+		for name := range mv.skills {
+			if _, dup := remaining[name]; !dup {
+				remaining[name] = mv.ident
+			}
 		}
 		moves = append(moves, *mv)
 	}
@@ -71,7 +82,7 @@ func (e *Engine) PlanRemoval(ctx context.Context, next *loadout.Loadout, dropped
 	for i := range p.Spawns {
 		p.Spawns[i].sources = withoutSources(p.Spawns[i].sources, dropped)
 	}
-	return p, sortedKeys(remaining), nil
+	return p, remaining, nil
 }
 
 // moveAt describes where a source's links belong at the commit it is already

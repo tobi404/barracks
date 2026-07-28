@@ -404,38 +404,22 @@ func (p *writePlan) apply(root string) error {
 
 	// Only while empty, as everywhere else: anything the user left in a dropped
 	// skill's directory holds it open, and that is the right outcome.
+	//
+	// The directory standing is not itself worth reporting - a kept file already
+	// was. What is worth reporting is a file no record accounts for: barracks is
+	// leaving somebody's work behind inside a directory it used to manage, and
+	// that must never be something the user has to find out for themselves.
+	// Remove obeys exactly this rule when a whole garrison goes; a skill dropped
+	// from one is the same event, one directory at a time, so both go through
+	// one pruner.
+	pr := newPruner(root, p.known, nil)
 	for _, rel := range p.prune {
-		p.pruneDropped(root, rel)
+		pr.prune(rel)
 	}
-	return nil
-}
-
-// pruneDropped removes a dropped skill's directory while it is empty, and says
-// what is holding it open when it is not.
-//
-// The directory standing is not itself worth reporting - a kept file already
-// was. What is worth reporting is a file no record accounts for: barracks is
-// leaving somebody's work behind inside a directory it used to manage, and that
-// must never be something the user has to find out for themselves. Remove obeys
-// exactly this rule when a whole garrison goes; a skill dropped from one is the
-// same event, one directory at a time.
-func (p *writePlan) pruneDropped(root, rel string) {
-	abs := filepath.Join(root, filepath.FromSlash(rel))
-	entries, err := os.ReadDir(abs)
-	if err != nil {
-		return // absent, or not a directory any more; neither is ours to fix
-	}
-	if len(entries) == 0 {
-		_ = os.Remove(abs)
-		return
-	}
-	for _, ent := range entries {
-		child := rel + "/" + ent.Name()
-		if p.known[child] {
-			continue
-		}
+	for _, child := range pr.foreign() {
 		p.notices = append(p.notices, "left in place: "+child+" - barracks has no record of putting it there")
 	}
+	return nil
 }
 
 // undo puts the tree back exactly as it was before apply ran.

@@ -182,19 +182,15 @@ func (e *Env) garrisonsHere(root, name string, all bool) []garrison.Ref {
 	if root == "" {
 		return nil
 	}
-	refs, err := garrison.Garrisoned(root)
+	m, err := garrison.Load(root)
 	if err != nil {
 		fmt.Fprintf(e.Err, "! %v\n", err)
 		return nil
 	}
 	if all {
-		return refs
+		return m.Refs()
 	}
 	if name == "" {
-		return nil
-	}
-	m, err := garrison.Load(root)
-	if err != nil {
 		return nil
 	}
 	var id string

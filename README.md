@@ -167,7 +167,14 @@ barracks strip frontend github.com/owner/monorepo#main:packages/skills
 ```
 
 Everything the loadout's other sources provide stays exactly where it is, and a skill
-another equipped source also provides is **handed over to it** rather than removed.
+another equipped source also provides is **handed over to it** rather than removed. The
+report says which is which, with the same marks the rest of barracks uses:
+
+```
+stripped github.com/owner/skills#main:skills from frontend
+  - css
+  ~ react (still provided by github.com/other/skills#main:skills)
+```
 
 Name the source however you like - the shorthand you equipped it with, or the full label
 `barracks list` prints. The ref is ignored when it does not match, because

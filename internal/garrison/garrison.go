@@ -517,12 +517,18 @@ func Garrisoned(root string) ([]Ref, error) {
 	if err != nil {
 		return nil, err
 	}
+	return m.Refs(), nil
+}
+
+// Refs names every garrison this manifest holds, name-sorted, so a caller that
+// has already loaded the lockfile never reads it a second time to ask.
+func (m *Manifest) Refs() []Ref {
 	out := make([]Ref, 0, len(m.Garrisons))
 	for _, g := range m.Garrisons {
 		out = append(out, Ref{ID: g.ID, Loadout: g.Loadout})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Loadout < out[j].Loadout })
-	return out, nil
+	return out
 }
 
 // Guard answers whether a repository's committed tier claims a path.

@@ -362,3 +362,116 @@ func TestStripRefusesASpellingItCannotResolve(t *testing.T) {
 		})
 	}
 }
+
+// TestStripTellsAHandedOverSkillApartFromARemovedOne: the list under the header
+// is the stripped source's contribution, and printing all of it as a removal
+// would tell somebody a skill is gone when another equipped source still
+// provides it. The marks are the ones the rest of the tool already renders a
+// change with - '-' gone, '~' changed hands - so the two read apart at a glance.
+//
+// Nothing is spawned here on purpose: the answer comes from the loadout's
+// sources, so it has to be right for a loadout deployed nowhere at all.
+func TestStripTellsAHandedOverSkillApartFromARemovedOne(t *testing.T) {
+	h := newHarness(t)
+	other := h.secondSource(
+		testutil.Skill{Path: "skills/react", Body: "from the second source\n"},
+		testutil.Skill{Path: "skills/hooks"},
+	)
+
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"), "--except", "legacy")
+	h.mustRun("equip", "frontend", other.Dir+"#main:skills")
+
+	out := h.mustRun("strip", "frontend", h.sourceArg("skills"))
+	if !strings.Contains(out, "- css") {
+		t.Errorf("a skill nothing else provides was not marked as removed:\n%s", out)
+	}
+	if !strings.Contains(out, "~ react") {
+		t.Errorf("a handed-over skill was not marked apart from a removed one:\n%s", out)
+	}
+	if strings.Contains(out, "- react") {
+		t.Errorf("a skill another source still provides was reported as removed:\n%s", out)
+	}
+	if !strings.Contains(out, "still provided by") || !strings.Contains(out, "src2") {
+		t.Errorf("the surviving provider was not named:\n%s", out)
+	}
+}
+
+// TestStripReportsAPlainRemovalPlainly: the common case is every skill going,
+// and it must not have grown any noise to make room for the handover.
+func TestStripReportsAPlainRemovalPlainly(t *testing.T) {
+	h := newHarness(t)
+	other := h.secondSource(testutil.Skill{Path: "skills/hooks"})
+
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"), "--except", "legacy")
+	h.mustRun("equip", "frontend", other.Dir+"#main:skills")
+
+	out := h.mustRun("strip", "frontend", h.sourceArg("skills"))
+	for _, want := range []string{"- react", "- css"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("strip output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "~") || strings.Contains(out, "still provided by") {
+		t.Errorf("nothing was handed over, but the output says otherwise:\n%s", out)
+	}
+}
+
+// TestStripDoesNotClaimSuccessWhenTheDefinitionCannotBeSaved: the committed half
+// runs first and is written by the time the definition is saved, so a save that
+// fails leaves the repository and the loadout disagreeing. Reporting the strip as
+// done would be a report of something that did not happen, and would leave the
+// user with no idea their lockfile had moved without their definition.
+func TestStripDoesNotClaimSuccessWhenTheDefinitionCannotBeSaved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: an unwritable directory cannot be simulated with permissions")
+	}
+	h := newHarness(t)
+	other := h.secondSource(testutil.Skill{Path: "skills/hooks"})
+	h.mustRun("train", "frontend")
+	h.mustRun("equip", "frontend", h.sourceArg("skills"), "--except", "legacy")
+	h.mustRun("equip", "frontend", other.Dir+"#main:skills")
+	h.mustRun("garrison", "frontend")
+	h.work.Commit(t, "garrison")
+
+	dir := h.layout.LoadoutsDir()
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("chmod loadouts dir: %v", err)
+	}
+	defer os.Chmod(dir, 0o755)
+
+	out, errb, err := h.run("strip", "frontend", other.Dir+"#main:skills")
+	if err == nil {
+		t.Fatal("strip reported success though the definition could not be saved")
+	}
+	if strings.Contains(out, "stripped") {
+		t.Errorf("a strip that did not happen was reported as done:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "still equipped") {
+		t.Errorf("the error does not say the source is still equipped: %v", err)
+	}
+	if !strings.Contains(err.Error(), garrison.LockName) {
+		t.Errorf("the error does not name the committed change already written: %v", err)
+	}
+	if !strings.Contains(errb, "save loadout") {
+		t.Errorf("the save failure itself was not reported:\n%s", errb)
+	}
+	// The committed half really had run: that is what the error is about.
+	if testutil.Exists(h.garrisonPath(".claude/skills/hooks/SKILL.md")) {
+		t.Fatal("the committed tier was untouched; this no longer tests the state the error describes")
+	}
+
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("restore loadouts dir: %v", err)
+	}
+	l, lerr := h.loadout("frontend")
+	if lerr != nil || len(l.Equipment) != 2 {
+		t.Errorf("the definition changed despite the failure: %v %v", l, lerr)
+	}
+	// And the way back the error names really is the way back.
+	h.mustRun("garrison", "frontend")
+	if !testutil.Exists(h.garrisonPath(".claude/skills/hooks/SKILL.md")) {
+		t.Error("the named recovery did not bring the committed files back in step")
+	}
+}

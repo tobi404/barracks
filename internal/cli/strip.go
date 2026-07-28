@@ -102,8 +102,33 @@ loadout, its spawns and its committed files exactly as they were.`),
 
 			eng.Apply([]*upgrade.LoadoutPlan{plan})
 
+			// Apply stops at the definition: relinking spawns onto sources the
+			// saved loadout does not record would leave the two out of step, so
+			// a save that failed means nothing was detached and no spawn moved.
+			// Saying "stripped" here would be a report of something that did not
+			// happen - and the committed half, which runs first, has already been
+			// written without the source, so what the user has to hear is that
+			// the repository and the loadout now disagree.
+			if len(plan.Errs) > 0 {
+				committed.render(env)
+				for _, err := range plan.Errs {
+					fmt.Fprintf(env.Err, "! %v\n", err)
+				}
+				return fmt.Errorf("%s was left as it was: its definition could not be saved, so %s is still equipped and no spawn moved%s",
+					l.Name, dropped.Ident(), committed.stranded(l.Name))
+			}
+
 			fmt.Fprintf(env.Out, "stripped %s from %s\n", dropped.Ident(), l.Name)
+			// The same marks the rest of the tool renders a change with: what is
+			// gone takes '-', and a skill a surviving source also provides takes
+			// '~', because it was handed over rather than removed. Naming the
+			// survivor is the point - "it is still there somehow" would leave the
+			// user checking for themselves.
 			for _, s := range dropped.Skills {
+				if by, still := left[s]; still {
+					fmt.Fprintf(env.Out, "  ~ %s (still provided by %s)\n", s, by)
+					continue
+				}
 				fmt.Fprintf(env.Out, "  - %s\n", s)
 			}
 			if len(next.Equipment) == 0 {
@@ -117,9 +142,6 @@ loadout, its spawns and its committed files exactly as they were.`),
 				renderSpawn(env, &plan.Spawns[s])
 			}
 			committed.render(env)
-			for _, err := range plan.Errs {
-				fmt.Fprintf(env.Err, "! %v\n", err)
-			}
 			if plan.Failed() {
 				return fmt.Errorf("the source was detached but some spawns could not be brought in line")
 			}
@@ -175,7 +197,7 @@ type committedChange struct {
 // rewritten. A lockfile cannot record a garrison of no skills, and leaving the
 // committed files behind with no entry describing them is the one state this
 // tier must never be in.
-func (e *Env) stripGarrison(ctx context.Context, next *loadout.Loadout, left []string, force bool) (committedChange, error) {
+func (e *Env) stripGarrison(ctx context.Context, next *loadout.Loadout, left map[string]string, force bool) (committedChange, error) {
 	loc, inRepo := e.repoHere(ctx)
 	if !inRepo {
 		return committedChange{}, nil
@@ -197,6 +219,19 @@ func (e *Env) stripGarrison(ctx context.Context, next *loadout.Loadout, left []s
 		return committedChange{}, err
 	}
 	return committedChange{updated: res}, nil
+}
+
+// stranded names what this repository is left holding when the rest of the strip
+// could not go through. The committed half runs first and is written by then, so
+// a failure afterwards leaves the lockfile describing a loadout the definition
+// still equips - and the way back is the ordinary command that puts a repository
+// in step with its loadout again.
+func (c committedChange) stranded(name string) string {
+	if c.updated == nil && c.removed == nil {
+		return ""
+	}
+	return fmt.Sprintf(".\nThis repository's committed files and %s were already rewritten without it; run `barracks garrison %s` to bring them back in step",
+		garrison.LockName, name)
 }
 
 func (c committedChange) render(env *Env) {

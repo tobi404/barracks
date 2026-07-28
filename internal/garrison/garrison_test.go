@@ -366,6 +366,31 @@ func TestRemoveTakesOnlyWhatTheLockfileRecords(t *testing.T) {
 	}
 }
 
+// TestRemoveTakesTheDirectoriesInsideASkillWithIt: a lockfile records files, so
+// a directory barracks itself made *inside* a skill is only ever implied by one.
+// Reporting it as somebody else's work would be a lie, and leaving it standing
+// would leave an empty tree behind where a garrison used to be.
+func TestRemoveTakesTheDirectoriesInsideASkillWithIt(t *testing.T) {
+	f := newFixture(t)
+	testutil.WriteFile(t, filepath.Join(f.src.Dir, "skills", "css", "ref", "deep", "notes.md"), "reference\n")
+	f.src.Commit(t, "add a nested reference")
+	f.install(f.loadout("frontend"))
+	if !testutil.Exists(f.path(".claude/skills/css/ref/deep/notes.md")) {
+		t.Fatal("the nested file was never vendored")
+	}
+
+	rep, err := f.engine.Remove(f.root, Ref{Loadout: "frontend"})
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if rep.Foreign() {
+		t.Errorf("barracks' own directories were reported as somebody else's: %v", rep.Kept)
+	}
+	if testutil.Exists(f.path(".claude")) {
+		t.Error("an empty chain of barracks' own directories was left standing")
+	}
+}
+
 // TestRemoveLeavesOtherGarrisonsAlone proves the lockfile is per-loadout, so one
 // removal is not a reset of the whole file.
 func TestRemoveLeavesOtherGarrisonsAlone(t *testing.T) {
@@ -373,8 +398,15 @@ func TestRemoveLeavesOtherGarrisonsAlone(t *testing.T) {
 	f.install(f.loadout("frontend", "react"))
 	f.install(f.loadout("styles", "css"))
 
-	if _, err := f.engine.Remove(f.root, Ref{Loadout: "frontend"}); err != nil {
+	rep, err := f.engine.Remove(f.root, Ref{Loadout: "frontend"})
+	if err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+	// The other garrison's directory holds the shared parent open, which is
+	// correct and unremarkable. Reporting it as a file barracks has no record of
+	// would be a false alarm about the one thing that report exists to mean.
+	if rep.Foreign() {
+		t.Errorf("another garrison's files were reported as somebody's own work: %v", rep.Kept)
 	}
 	if testutil.Exists(f.path(".claude/skills/react")) {
 		t.Error("the removed garrison's files survived")
@@ -1065,5 +1097,56 @@ func TestDroppingASkillReportsWhatIsHoldingItsDirectoryOpen(t *testing.T) {
 	}
 	if testutil.Exists(f.path(".claude/skills/css/SKILL.md")) {
 		t.Error("the dropped skill's own file survived")
+	}
+}
+
+// TestDroppingASkillTakesItsOwnDirectoriesWithIt is the other half of that rule,
+// on the update path: what a dropped skill leaves behind is barracks' own
+// directories, not the user's, and calling them foreign would report a problem
+// that does not exist while leaving an empty directory in the diff.
+func TestDroppingASkillTakesItsOwnDirectoriesWithIt(t *testing.T) {
+	f := newFixture(t)
+	testutil.WriteFile(t, filepath.Join(f.src.Dir, "skills", "css", "ref", "deep", "notes.md"), "reference\n")
+	f.src.Commit(t, "add a nested reference")
+	f.install(f.loadout("frontend"))
+
+	res := f.install(f.loadout("frontend", "react"))
+
+	for _, n := range res.Notices {
+		if strings.Contains(n, "no record") {
+			t.Errorf("barracks' own directory was reported as somebody else's: %q", n)
+		}
+	}
+	if testutil.Exists(f.path(".claude/skills/css")) {
+		t.Error("the dropped skill left an empty chain of its own directories behind")
+	}
+	f.mustInspect()
+}
+
+// TestADroppedSkillStillReportsWhatIsNestedInsideIt: the directories going with
+// the skill must not take the reporting with them - a file of the user's, however
+// deep, is still kept and still said out loud.
+func TestADroppedSkillStillReportsWhatIsNestedInsideIt(t *testing.T) {
+	f := newFixture(t)
+	testutil.WriteFile(t, filepath.Join(f.src.Dir, "skills", "css", "ref", "notes.md"), "reference\n")
+	f.src.Commit(t, "add a nested reference")
+	f.install(f.loadout("frontend"))
+
+	mine := f.path(".claude/skills/css/ref/mine.md")
+	testutil.WriteFile(t, mine, "mine\n")
+
+	res := f.install(f.loadout("frontend", "react"))
+
+	var said bool
+	for _, n := range res.Notices {
+		if strings.Contains(n, "ref/mine.md") && strings.Contains(n, "no record") {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("a file nested inside a dropped skill was not reported: %v", res.Notices)
+	}
+	if got := testutil.ReadFile(t, mine); got != "mine\n" {
+		t.Errorf("it was destroyed instead: %q", got)
 	}
 }

@@ -233,7 +233,13 @@ deliberate decision, not a refactor.
   there it must land on pins the definition already records. A live `barracks run` session
   refuses a strip rather than being skipped: an upgrade's skip is recoverable because the
   source is still equipped, and a stripped one is gone, so nothing would ever come back for
-  the links it left.
+  the links it left. A handover has to be *reported* as one: `PlanRemoval` returns each
+  surviving skill attributed to the source that provides it, so `cli` can mark a handed-over
+  skill `~` against a removed one's `-` rather than telling somebody a skill is gone when it
+  is not. That attribution comes from the loadout's sources, never from the spawn plans - it
+  must be right for a loadout garrisoned but deployed nowhere. And because the committed half
+  runs first, a definition that then fails to save leaves the repository ahead of the loadout:
+  `strip` prints no success line on that path and names the lockfile it already rewrote.
 - **`rename` writes the lockfile first and can put every record back.** `cli.renamer` orders
   lockfile, definition, leases, because the lockfile is the only record a rename can *orphan* -
   a pre-identity entry is found by name alone. Undo restores the lockfile from the bytes
@@ -351,6 +357,13 @@ deliberate decision, not a refactor.
   revoked last can finish the cleanup. `garrison.inheritDirs` does the same across both
   tiers - it reads the other garrisons *and* the leases in scope - because a garrison and a
   spawn can legitimately share `.claude/skills` while owning different skills under it.
+  `garrison.pruner` is the reporting half of that same sharing and owns both removal paths -
+  a whole garrison going, and one skill dropped from an update. Two rules, each guarding a
+  false alarm: a lockfile records *files*, so a directory barracks made inside a skill is
+  known when any recorded path sits under it (an exact match would call barracks' own
+  `css/ref` somebody's work and leave it standing), and a path `Engine.claimedByOthers`
+  finds - another garrison, a lease in scope - is skipped in silence rather than reported.
+  "barracks has no record of putting it there" has to be true when it is said.
 - `barracks.lock`'s `updated_at` is only bumped when the recorded entry otherwise changes
   (`garrison.sameRecord`). Without that, every `barracks garrison` would dirty the repository
   and the one signal that matters in review - did anything actually change - would be
