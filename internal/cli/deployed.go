@@ -18,7 +18,7 @@ func newDeployedCmd(env *Env) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "deployed",
-		Short: "Show what is currently spawned here",
+		Short: "Show what is currently deployed here, spawned or committed",
 		Long: strings.TrimSpace(`
 Shows the loadouts currently deployed in this repo, which agent each one went
 into, and how each one ends. The same loadout spawned into two agents shows up
@@ -28,8 +28,15 @@ Every barracks command reaps expired leases first, so what this prints is
 already up to date - a deadline that has passed or a run whose process exited
 will have been cleaned up before the list is drawn.
 
+Anything garrisoned here is listed too, marked [committed]. It is deployed in
+this repository as much as a spawn is - more permanently, in fact - and is read
+from barracks.lock rather than from a lease, so no lifetime governs it and no
+reap can end it.
+
 Use --everywhere to see every live spawn on the machine, including global ones
-and other repos.
+and other repos. It still only knows about this repository's barracks.lock:
+barracks keeps no machine-wide index of garrisons, because that record travels
+with the repository rather than with the machine.
 
   barracks deployed
   barracks deployed --target cursor
