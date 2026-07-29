@@ -7,8 +7,13 @@ git repos and materialises them into any repo, in one of two tiers: personal (sy
 lease-governed, kept out of git - `internal/spawn`) or committed (real files plus
 `barracks.lock`, shared by everyone who clones - `internal/garrison`). It has two surfaces:
 the commands, and a full-screen roster (`internal/tui`, Bubble Tea v2) that a bare `barracks`
-opens on a terminal. `README.md` covers what it does and both surfaces; this file covers what
-a contributor needs that the code does not show.
+opens on a terminal. `README.md` is the front page - what it does, how to install it, and the
+personal/committed distinction - and routes to `docs/` for the detail: `docs/commands.md`
+(every command and flag, source syntax), `docs/roster.md`, `docs/targets.md`,
+`docs/on-disk.md`, `docs/output.md` (progress and voice), `docs/development.md` (make targets,
+CI, releasing). This file covers what a contributor needs that the code does not show. Keep
+the split: user-facing prose goes in `README.md` or a `docs/` page, never here, and nothing
+here moves the other way.
 
 ## Build and test
 
@@ -57,7 +62,7 @@ the same mental model as the code share its mistakes.
 Tagging `v*` runs `.github/workflows/release.yml`, which is GoReleaser
 (`.goreleaser.yaml`) at the version in `.goreleaser-version` - the only place that version
 is written, read by both `make release-check`/`make release-snapshot` and the workflow.
-`README.md`'s Releasing section is the human-facing contract (tag format, the
+`docs/development.md`'s Releasing section is the human-facing contract (tag format, the
 `HOMEBREW_TAP_GITHUB_TOKEN` secret); the notes below are what the files themselves do not say.
 
 - **Prove release changes with `make release-snapshot`, never with a tag.** It produces
@@ -111,7 +116,7 @@ is written, read by both `make release-check`/`make release-snapshot` and the wo
   `vcs.*` settings from a linked git worktree, so that fallback looks dead when tested
   from one; it is not.
 - **Homebrew is a cask (`homebrew_casks`), not a formula.** GoReleaser deprecated `brews`
-  and `goreleaser check` fails on it. Casks are macOS-only, which is why the README sends
+  and `goreleaser check` fails on it. Casks are macOS-only, which is why `docs/development.md` sends
   Linux users to `go install` or the tarball, and why the cask carries a `postflight`
   clearing `com.apple.quarantine` from both unsigned binaries. `skip_upload` must stay the
   quoted literal `"auto"` - GoReleaser skips the cask push for a prerelease tag on that

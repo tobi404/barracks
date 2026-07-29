@@ -57,6 +57,7 @@ archives:
     formats: [tar.gz]
     files:
       - README.md
+      - docs/** # README links into docs/ relatively; without these they are dead in a tarball
       - LICENSE # a downloaded archive has to carry the grant of rights with it
 
 checksum:
