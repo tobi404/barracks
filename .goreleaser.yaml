@@ -57,6 +57,7 @@ archives:
     formats: [tar.gz]
     files:
       - README.md
+      - docs/** # README links into docs/ relatively; without these they are dead in a tarball
       - LICENSE # a downloaded archive has to carry the grant of rights with it
 
 checksum:
@@ -99,8 +100,8 @@ release:
 
 # A cask, not a formula: GoReleaser deprecated `brews` in favour of
 # `homebrew_casks` and `goreleaser check` fails on the old key. Casks are macOS
-# only, so Homebrew on Linux is not an install path - the README sends Linux
-# users to `go install` or the tarball.
+# only, so Homebrew on Linux is not an install path - docs/development.md sends
+# Linux users to `go install` or the tarball.
 homebrew_casks:
   - name: barracks
     ids: [barracks] # the archive id, which carries both binaries
