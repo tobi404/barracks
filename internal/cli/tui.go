@@ -108,7 +108,8 @@ func (e *Env) tuiDeploy(ctx context.Context, l *loadout.Loadout, report func(str
 	out := tui.Outcome{Title: fmt.Sprintf("%s deployed", l.Name)}
 	out.Lines = append(out.Lines, fmt.Sprintf("targets: %s (%s)", strings.Join(sel.IDs(), ", "), sel.Reason()))
 	for i, res := range results {
-		out.Lines = append(out.Lines, fmt.Sprintf("%s  %d skills", sel.Targets[i].Display, len(res.Skills)))
+		out.Lines = append(out.Lines, fmt.Sprintf("%s  %d %s",
+			sel.Targets[i].Display, len(res.Skills), plural(len(res.Skills), "skill", "skills")))
 		for _, s := range res.Skills {
 			out.Lines = append(out.Lines, "  + "+s.Name)
 		}
@@ -145,7 +146,8 @@ func (e *Env) tuiRecall(ctx context.Context, l *loadout.Loadout) tui.Outcome {
 		}
 		found = true
 		rep := lease.Revoke(ls, e.store, e.leases, "recalled")
-		out.Lines = append(out.Lines, fmt.Sprintf("%s  %d skills removed", displayOf(ls.Target), len(rep.Removed)))
+		out.Lines = append(out.Lines, fmt.Sprintf("%s  %d %s removed",
+			displayOf(ls.Target), len(rep.Removed), plural(len(rep.Removed), "skill", "skills")))
 		for _, k := range rep.Kept {
 			notices = append(notices, fmt.Sprintf("left in place (barracks did not create it): %s - %s", k.Path, k.Reason))
 		}

@@ -478,6 +478,36 @@ func TestRosterRecallsWhatItDeployed(t *testing.T) {
 	}
 }
 
+// The outcome card counts what an order moved, and a count of one is not
+// "1 skills".
+//
+// The dossier's own counts are held by internal/tui's TestTheDossierCountsInTheSingular,
+// but the line an outcome card prints is built here, from the engine's results -
+// so it is a second set of sites with the same failure mode, and the roster
+// reporting "1 skills removed" reads exactly as wrong as the dossier doing it.
+// Both directions of the order are asserted because each builds its own line.
+func TestTheOutcomeCardCountsInTheSingular(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "scouts")
+	h.mustRun("equip", "scouts", h.sourceArg("skills"), "--only", "react")
+
+	deployed := h.frame(120, 32, "s", "y", "@pump")
+	if !strings.Contains(deployed, "SCOUTS DEPLOYED") {
+		t.Fatalf("the deploy never happened, so this proved nothing:\n%s", deployed)
+	}
+	if !strings.Contains(deployed, "1 skill ") || strings.Contains(deployed, "1 skills") {
+		t.Errorf("a one-skill deploy is not reported as \"1 skill\":\n%s", deployed)
+	}
+
+	recalled := h.frame(120, 32, "r", "y", "@pump")
+	if !strings.Contains(recalled, "SCOUTS RECALLED") {
+		t.Fatalf("the recall never happened, so this proved nothing:\n%s", recalled)
+	}
+	if !strings.Contains(recalled, "1 skill removed") || strings.Contains(recalled, "1 skills") {
+		t.Errorf("a one-skill recall is not reported as \"1 skill removed\":\n%s", recalled)
+	}
+}
+
 // TestRosterMovesAndCancels covers the parts of the screen that change nothing.
 func TestRosterMovesAndCancels(t *testing.T) {
 	h := newHarness(t)
