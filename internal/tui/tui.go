@@ -18,19 +18,83 @@ import (
 	"github.com/tobi404/barracks/internal/loadout"
 )
 
+// Session is the terminal an order owns while it runs.
+//
+// An order that fetches, and an order that starts an agent, both run with the
+// roster's screen handed back to them - see terminalJob. These are the streams
+// of the terminal they now own: what an order writes here is what the user is
+// looking at, and what it reads here is what the user types. Nothing an order
+// says may go into the model while it holds this, because the event loop is
+// blocked waiting for it to finish.
+type Session struct {
+	In  io.Reader
+	Out io.Writer
+	Err io.Writer
+}
+
+// TargetOption is one agent the deploy picker offers.
+type TargetOption struct {
+	// ID is the target's registry ID, which is what a chosen selection is
+	// expressed in.
+	ID string
+	// Display is the agent's human name.
+	Display string
+	// Present is whether this repository already shows signs of that agent.
+	Present bool
+}
+
+// Launcher is one agent program a run can start.
+type Launcher struct {
+	// Command is the program, exactly as it will be executed.
+	Command string
+	// Display is the agent's human name.
+	Display string
+}
+
 // Config is everything the roster needs from the rest of barracks.
 type Config struct {
 	// Records is where the roster is read from.
 	Records reader
+
 	// Deploy spawns a loadout into the repository the TUI was launched from.
-	// Progress lines the operation reports are handed to report as they happen.
 	//
-	// It runs with the terminal handed back to it - see terminalJob - so report
-	// is written to the terminal rather than drawn on the roster, and anything
-	// it starts may prompt there and be answered.
-	Deploy func(ctx context.Context, l *loadout.Loadout, report func(string)) Outcome
-	// Recall removes every spawn of a loadout in this scope.
+	// targets is what the picker chose, and is nil when the user left it alone:
+	// nil is "decide the way `barracks spawn` decides", which is not the same
+	// statement as naming the same agents by hand, because it leaves the
+	// loadout's declaration and the repository's own evidence in charge.
+	//
+	// It runs with the terminal handed back to it - see terminalJob - so it
+	// reports to Session rather than drawing on the roster, and anything it
+	// starts may prompt there and be answered.
+	Deploy func(ctx context.Context, l *loadout.Loadout, targets []string, s Session) Outcome
+	// Recall removes every spawn of a loadout in this scope. The committed tier
+	// is deliberately not part of it - see the roster's recall order.
 	Recall func(ctx context.Context, l *loadout.Loadout) Outcome
+	// Garrison commits a loadout into this repository: real files plus
+	// barracks.lock, for everyone who clones it. It fetches, so it too runs
+	// with the terminal handed back.
+	Garrison func(ctx context.Context, l *loadout.Loadout, s Session) Outcome
+	// Upgrade re-resolves a loadout's sources and reports what carrying that
+	// through would change, without changing any of it. What comes back carries
+	// the plan itself, so applying it applies exactly what was shown rather
+	// than a second answer to the same question.
+	Upgrade func(ctx context.Context, l *loadout.Loadout, s Session) Preview
+	// Launch spawns a loadout, runs an agent with those skills, and recalls it
+	// the moment the agent exits. The agent owns the terminal for its whole
+	// life, which is what Session is for.
+	Launch func(ctx context.Context, l *loadout.Loadout, program Launcher, s Session) Outcome
+
+	// Targets is every agent barracks can deploy to, in the order the picker
+	// offers them.
+	Targets []TargetOption
+	// Selection is where a deploy of this loadout would go if nobody chose
+	// otherwise, and why - the same answer the commands print. The picker opens
+	// on it, so leaving the picker alone deploys exactly where the command
+	// would have.
+	Selection func(l *loadout.Loadout) (ids []string, reason string)
+	// Launchers are the agent programs a run can start on this machine.
+	Launchers []Launcher
+
 	// Version is the build line shown in the header.
 	Version string
 
@@ -59,6 +123,18 @@ type Outcome struct {
 	Notices []string
 	// Err is set when the action refused or failed.
 	Err error
+}
+
+// Preview is a plan shown before it is carried out.
+//
+// It is how `upgrade` reaches the roster without a second implementation of
+// what an upgrade would do: the body below is the plan, and Apply carries out
+// that same plan rather than re-deciding it. An Apply of nil means there is
+// nothing to offer - the plan refused, or there was never anything to do - and
+// the roster shows the body as an outcome instead of as an order.
+type Preview struct {
+	Outcome
+	Apply func(ctx context.Context, s Session) Outcome
 }
 
 // Run opens the roster and blocks until the user leaves it.

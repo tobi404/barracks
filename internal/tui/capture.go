@@ -111,6 +111,11 @@ func keyPress(name string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
 		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "space":
+		// The name a binding is written in and the key the terminal sends are
+		// not the same string for this one, and a harness that took the name
+		// literally would press "s" instead - which is the deploy key.
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	}
 	r := []rune(name)
 	k := tea.KeyPressMsg{Code: r[0], Text: name}

@@ -77,9 +77,16 @@ type Env struct {
 	place     string
 	preview   bool
 	quiet     bool
-	// captured is where command output goes while the full-screen roster owns
-	// the terminal. Nil outside it.
-	captured *bytes.Buffer
+	// capturedOut and capturedErr are where command output goes while the
+	// full-screen roster owns the terminal. Nil outside it.
+	//
+	// They are two buffers rather than one because the roster's outcome panel
+	// draws the same distinction the streams already carry: what a command
+	// reports goes to stdout and becomes the card's body, and what it could not
+	// do goes to stderr and becomes a notice, which is never elided before the
+	// body is. Folding them together would file every report as a problem.
+	capturedOut *bytes.Buffer
+	capturedErr *bytes.Buffer
 }
 
 func (e *Env) now() time.Time {
