@@ -373,7 +373,13 @@ deliberate decision, not a refactor.
   body of a report is cut first because a list can be counted instead of read, then notices,
   and never the closing hint, which is the only thing that says how to leave. Whatever is cut
   says how much it stood for (`model.elide`) - a card silently showing eight of thirty skills
-  reads exactly like a spawn that installed eight.
+  reads exactly like a spawn that installed eight. A card is a layer over the roster so the
+  unit stays visible behind its own order, but only in whole rows of it: `views.curtain` is a
+  blank band the width of the terminal and the height of the card, composited beneath it, and
+  without it the dossier line under each card row keeps whatever tail the card does not cover -
+  an orphaned word floating beside a REFUSED card, which reads as a rendering fault rather than
+  as context. It has to be the band rather than the strings, because the line that overflows is
+  whichever one happens to be long.
 - **Nothing barracks writes to a stream may reach the alternate screen - and nothing may be
   dropped to keep it out.** While the roster owns the terminal, `cli.Env.captureStreams`
   redirects `Env.Out` and `Env.Err` into a buffer, and `capturedLines` folds what they said
@@ -403,10 +409,17 @@ deliberate decision, not a refactor.
   `cli.Env.tuiDeploy` keeps `Live: false` for the same reason it always had it, now sharper:
   nothing barracks writes may erase a prompt it did not raise.
 - **Bare `barracks` opens the roster only when stdout is a terminal it can own; `barracks tui`
-  refuses in barracks' own wording.** Off a terminal a bare invocation prints byte for byte
-  the help it always printed - a full-screen program in a pipe writes alternate-screen and
-  cursor sequences into whatever is reading and then waits forever for a key that never comes,
-  which would hang `barracks` in any script or CI job. `cli.Env.canOpenTheRoster` is that
+  refuses in barracks' own wording.** Off a terminal a bare invocation prints the help it
+  always printed plus the one line for the `tui` command, and nothing else - a full-screen
+  program in a pipe writes alternate-screen and cursor sequences into whatever is reading and
+  then waits forever for a key that never comes, which would hang `barracks` in any script or
+  CI job. That claim is held by a golden file (`internal/cli/testdata/bare-help.golden`,
+  regenerated with `BARRACKS_TEST_UPDATE_GOLDEN=1`) rather than by substring assertions, which
+  is what a line arriving or leaving is invisible to: making the root command runnable added a
+  `barracks [flags]` usage line nothing wanted, and only a diff against a binary built from the
+  previous commit found it. It is suppressed by deriving root's `UsageTemplate` from cobra's
+  own and gating the usage line on `.HasParent`, so subcommands - which all have one - are
+  untouched. `cli.Env.canOpenTheRoster` is that
   question and is deliberately **stricter** than `isTerminal`, which the voice and the progress
   indicator use: `os.DevNull` is a character device, so `barracks > /dev/null` from a shell
   with a controlling terminal passes `isTerminal` and would hang (verified on a pty, then

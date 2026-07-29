@@ -580,10 +580,11 @@ commands, and no key is bound to them - a key that announces it does not work is
 you have to learn.
 
 **Bare `barracks` opens the roster only when stdout is a terminal.** Anywhere else - a pipe,
-a redirect, a CI job - `barracks` prints exactly the help it has always printed, and not one
-escape sequence. A full-screen program in a pipe would write alternate-screen and cursor
-sequences into whatever is reading and then wait forever for a key that is never coming, so
-`barracks | head` and `barracks` in a script keep working the way they always did.
+a redirect, a CI job - `barracks` prints the help it has always printed plus the one line for
+`tui`, and not one escape sequence. A full-screen program in a pipe would write
+alternate-screen and cursor sequences into whatever is reading and then wait forever for a key
+that is never coming, so `barracks | head` and `barracks` in a script keep working the way
+they always did.
 
 `barracks tui` is the explicit spelling of the same screen. Because it is an explicit request
 for something interactive, off a terminal it refuses and says so rather than filling your

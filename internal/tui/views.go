@@ -51,16 +51,19 @@ func (m *model) View() tea.View {
 	// A modal is a layer over the roster rather than a different screen, so the
 	// unit being ordered about stays visible behind the order.
 	if overlay := m.overlay(); overlay != "" {
+		oh := lipgloss.Height(overlay)
+		y := maxInt(0, (m.h-oh)/2)
 		// Compositor, not Canvas.Compose: a Layer's own Draw ignores its x and
 		// y, and it is the compositor that flattens the hierarchy and applies
 		// the offsets. Composing the layers straight onto a canvas silently
 		// paints both at the origin.
 		return m.fit(&v, lipgloss.NewCompositor(
 			lipgloss.NewLayer(screenContent).Z(0),
+			lipgloss.NewLayer(curtain(m.w, oh)).X(0).Y(y).Z(1),
 			lipgloss.NewLayer(overlay).
 				X(maxInt(0, (m.w-lipgloss.Width(overlay))/2)).
-				Y(maxInt(0, (m.h-lipgloss.Height(overlay))/2)).
-				Z(1),
+				Y(y).
+				Z(2),
 		).Render())
 	}
 	return m.fit(&v, screenContent)
@@ -81,6 +84,28 @@ func (m *model) fit(v *tea.View, content string) tea.View {
 		MaxHeight(maxInt(1, m.h)).
 		Render(content))
 	return *v
+}
+
+// curtain is the blank band a card is drawn on, the full width of the terminal
+// and exactly as tall as the card.
+//
+// The roster behind a card is context, but only whole rows of it are: a card is
+// narrower than the screen, so without this the compositor leaves whatever the
+// dossier had on those rows sticking out past the card's border - the tail of a
+// truncated word, an orphaned "reaped" floating beside a REFUSED card. That
+// reads as a rendering fault rather than as context, and no amount of shortening
+// the strings behind it would fix it, because the line that overflows is
+// whichever one happens to be long. Clearing the band is what makes the card's
+// edge clean for a line of any length. The rows a card does not cover are left
+// exactly as they were, which is the whole point of drawing the order over the
+// unit rather than instead of it.
+func curtain(w, h int) string {
+	row := strings.Repeat(" ", maxInt(1, w))
+	rows := make([]string, maxInt(1, h))
+	for i := range rows {
+		rows[i] = row
+	}
+	return strings.Join(rows, "\n")
 }
 
 func (m *model) header() string {
@@ -276,7 +301,8 @@ func (m *model) dossier(u unit, w int) string {
 	}
 	for _, eq := range l.Equipment {
 		fmt.Fprintf(&b, "  %s %s\n", m.th.body.Render("▪"), m.th.body.Render(truncate(eq.Ident(), w-4)))
-		fmt.Fprintf(&b, "     %s\n", m.th.faint.Render(fmt.Sprintf("pinned %s · %d skills", shortCommit(eq.Commit), len(eq.Skills))))
+		fmt.Fprintf(&b, "     %s\n", m.th.faint.Render(fmt.Sprintf("pinned %s · %d %s",
+			shortCommit(eq.Commit), len(eq.Skills), plural(len(eq.Skills), "skill", "skills"))))
 		for _, s := range eq.Skills {
 			fmt.Fprintf(&b, "       %s\n", m.th.faint.Render(truncate(s, w-8)))
 		}
@@ -290,7 +316,8 @@ func (m *model) dossier(u unit, w int) string {
 	if u.Committed != nil {
 		fmt.Fprintf(&b, "  %s %s\n",
 			lipgloss.NewStyle().Foreground(m.th.held).Render("▣"),
-			m.th.body.Render(fmt.Sprintf("committed to this repository · %d skills", u.Committed.SkillCount())))
+			m.th.body.Render(fmt.Sprintf("committed to this repository · %d %s",
+				u.Committed.SkillCount(), plural(u.Committed.SkillCount(), "skill", "skills"))))
 		fmt.Fprintf(&b, "     %s\n", m.th.faint.Render("barracks.lock · no lease, never reaped"))
 	}
 	for _, ls := range u.Here {
@@ -318,7 +345,7 @@ func relativeTo(root, path string) string {
 }
 
 func describeLease(l *lease.Lease) string {
-	return fmt.Sprintf("%s · %d skills · %s", l.Target, len(l.Links), l.Kind)
+	return fmt.Sprintf("%s · %d %s · %s", l.Target, len(l.Links), plural(len(l.Links), "skill", "skills"), l.Kind)
 }
 
 func (m *model) footer() string {

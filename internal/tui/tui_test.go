@@ -450,6 +450,129 @@ func TestEveryOverlayFitsTheTerminal(t *testing.T) {
 	}
 }
 
+// The dossier counts things, and a count of one is not "1 skills".
+//
+// barracks says "1 skill" everywhere else it counts, so this is only ever the
+// roster disagreeing with the rest of the product. Every count the dossier
+// prints is asserted, not just the one that was noticed: a site that hardcodes
+// the plural reads correctly for every number but one, so nothing short of
+// looking at that number finds it.
+func TestTheDossierCountsInTheSingular(t *testing.T) {
+	r := fakeRecords{
+		root:     "/repo/lab",
+		loadouts: []*loadout.Loadout{unitLoadout("frontline", "css-ref")},
+		leases:   []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 1)},
+		garrisons: []garrison.Garrison{{
+			Loadout: "frontline", ID: "id-frontline", Targets: []string{"claude"},
+			Skills: []garrison.Skill{{Name: "css-ref", Target: "claude"}},
+		}},
+	}
+	got := plain(Frame(cfgFor(r), 120, 34))
+	for _, want := range []string{
+		"1 skill ", // the equipped source's pin line
+		"committed to this repository · 1 skill", // the garrison
+		"claude · 1 skill · ",                    // the live spawn
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the dossier never says %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "1 skills") {
+		t.Errorf("the dossier counts one skill as \"1 skills\":\n%s", got)
+	}
+}
+
+// TestACardHasACleanEdgeOverAnyDossier is the other half of "a card is a layer
+// over the roster": the unit stays visible behind its order, but only in whole
+// rows of it.
+//
+// A card is narrower than the screen, so whatever the dossier had on the rows it
+// covers used to keep its tail beside the card - the end of a truncated word, an
+// orphaned "reaped" floating past a REFUSED card. That reads as a rendering
+// fault, not as context. The claim is about a line of any length, so the records
+// here are built to overflow every card at every width rather than to reproduce
+// the strings that happened to overflow when this was found.
+func TestACardHasACleanEdgeOverAnyDossier(t *testing.T) {
+	long := strings.Repeat("armoury-", 30) + "ref"
+	l := unitLoadout("frontline", long, long+"-two", long+"-three")
+	l.Description = strings.Repeat("a description that runs the whole width of the pane and then some ", 4)
+	r := fakeRecords{
+		root:      "/repo/lab",
+		loadouts:  []*loadout.Loadout{l},
+		leases:    []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/"+long, 3)},
+		garrisons: []garrison.Garrison{{Loadout: "frontline", ID: "id-frontline", Targets: []string{"claude"}}},
+	}
+	cfg := cfgFor(r)
+	cfg.Deploy = (&deployTracker{outcome: Outcome{
+		Err:     errors.New("spawn into Claude Code: " + long + " is committed to this repository"),
+		Notices: []string{"left in place (barracks did not create it): /repo/lab/" + long},
+	}}).deploy
+	cfg.Recall = func(context.Context, *loadout.Loadout) Outcome { return Outcome{Title: "frontline recalled"} }
+
+	for _, size := range [][2]int{{80, 24}, {100, 30}, {140, 40}, {60, 16}} {
+		w, h := size[0], size[1]
+		for _, script := range [][]string{{"?"}, {"s"}, {"r"}, {"s", "y"}, {"s", "y", "@pump"}} {
+			frame := plain(Frame(cfg, w, h, script...))
+			assertCleanCardEdge(t, frame, w, fmt.Sprintf("%dx%d overlay %v", w, h, script))
+		}
+	}
+}
+
+// assertCleanCardEdge checks that on every row a card occupies, nothing but
+// blank space stands between its right border and the edge of the screen.
+//
+// The card is found by its own border rather than by recomputing where the
+// compositor put it: what is being asserted is the frame the user sees.
+func assertCleanCardEdge(t *testing.T, frame string, w int, what string) {
+	t.Helper()
+	lines := strings.Split(frame, "\n")
+	// The card's corners say which rows and which column it owns. Its sides are
+	// the same rune on both edges, so a row on its own cannot say where it ends.
+	top, bottom := -1, -1
+	for i, line := range lines {
+		if top < 0 && strings.ContainsRune(line, '╔') {
+			top = i
+		}
+		if strings.ContainsRune(line, '╚') {
+			bottom = i
+		}
+	}
+	if top < 0 {
+		t.Errorf("%s: no card was drawn, so this proved nothing:\n%s", what, frame)
+		return
+	}
+	if bottom < top {
+		bottom = len(lines) - 1 // a card the frame cut the bottom off
+	}
+	head := []rune(lines[top])
+	edge := -1
+	for j, r := range head {
+		if r == '╗' {
+			edge = j
+		}
+	}
+	if edge < 0 {
+		// A card at least as wide as the terminal has its own right border cut
+		// off by the frame, so there is no band beside it for anything to show
+		// through. That the row runs to the very edge is what says so; a row
+		// stopping short would mean the corner went missing some other way.
+		if len(head) != w {
+			t.Errorf("%s: the card's top border stops %d columns short of the screen and never closes: %q",
+				what, w-len(head), lines[top])
+		}
+		return
+	}
+	for i := top; i <= bottom && i < len(lines); i++ {
+		runes := []rune(lines[i])
+		if len(runes) <= edge+1 {
+			continue
+		}
+		if tail := strings.TrimSpace(string(runes[edge+1:])); tail != "" {
+			t.Errorf("%s: row %d leaves %q past the card's right border: %q", what, i, tail, lines[i])
+		}
+	}
+}
+
 func TestHelpOverlayOpensAndCloses(t *testing.T) {
 	r := fakeRecords{root: "/repo", loadouts: []*loadout.Loadout{unitLoadout("alpha")}}
 	if got := plain(Frame(cfgFor(r), 100, 24, "?")); !strings.Contains(got, "ORDERS") {

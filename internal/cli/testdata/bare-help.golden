@@ -1,0 +1,51 @@
+barracks turns a pile of agent skills scattered across git repos into named,
+versioned units you can deploy on demand.
+
+Train a loadout, equip it with skill sources, then spawn it into whatever repo
+you are working in - permanently, until a deadline, or only for as long as one
+command runs. Recall it and the repo is exactly as you found it.
+
+  barracks train frontend
+  barracks equip frontend gh:owner/skills#main:skills --only 'react-*'
+  barracks spawn frontend
+  barracks run frontend -- claude
+
+Skills are fetched once into a shared store and spawned as symlinks, so every
+repo on your machine shares one copy. Nothing barracks did not create is ever
+removed, and spawning leaves git status clean.
+
+For a team repository, garrison a loadout instead: real files plus a committed
+barracks.lock, so everyone who clones gets the identical skills at the identical
+versions with no barracks installed.
+
+  barracks garrison frontend
+  barracks inspect
+
+Usage:
+  barracks [command]
+
+Available Commands:
+  assign      Set which agents a loadout installs into
+  deployed    Show what is currently deployed here, spawned or committed
+  disband     Delete a loadout definition
+  equip       Equip a loadout with a git skill source
+  garrison    Commit a loadout into this repository for the whole team
+  help        Help about any command
+  inspect     Check this checkout against barracks.lock
+  list        List every loadout in the barracks
+  recall      Recall a spawned loadout from the current repo
+  rename      Rename a loadout, keeping everything it is deployed into working
+  run         Spawn a loadout, run a command, recall on exit
+  spawn       Spawn a loadout into the current repo
+  strip       Detach an equipped source and take its skills back out
+  targets     List the agents barracks can deploy to
+  train       Train a new loadout
+  tui         Open the full-screen roster
+  upgrade     Re-resolve loadout sources and relink live spawns
+
+Flags:
+  -h, --help      help for barracks
+  -q, --quiet     suppress the progress indicator and the flavor line (see also BARRACKS_QUIET)
+  -v, --version   version for barracks
+
+Use "barracks [command] --help" for more information about a command.

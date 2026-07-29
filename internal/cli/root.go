@@ -97,6 +97,17 @@ versions with no barracks installed.
 	}
 	root.SetOut(env.Out)
 	root.SetErr(env.Err)
+	// Cobra prints a `barracks [flags]` usage line for any command that is
+	// runnable, and the root only became runnable so a bare invocation could
+	// open the roster. Nothing invokes `barracks` for its flags alone, so that
+	// line is a side effect rather than information, and the help off a
+	// terminal is the help it always printed plus the one line for `tui`.
+	//
+	// Derived from cobra's own template rather than restated, so a cobra that
+	// changes the rest of the usage block still changes it here. Subcommands
+	// inherit this template and are unaffected: only the root has no parent.
+	root.SetUsageTemplate(strings.Replace(
+		root.UsageTemplate(), "{{if .Runnable}}", "{{if and .Runnable .HasParent}}", 1))
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false,
 		"suppress the progress indicator and the flavor line (see also "+EnvQuiet+")")

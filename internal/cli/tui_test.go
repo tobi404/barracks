@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -71,13 +72,33 @@ func (h *harness) frameAndTerminal(w, hh int, script ...string) (string, string)
 	return plain(frame), released
 }
 
+// envUpdateGolden rewrites the recorded help instead of comparing against it,
+// for the one case where the change to that output was the point.
+//
+// An environment variable rather than a test flag: a bare `barracks` in this
+// suite reaches cobra with no argument list of its own, so cobra falls back to
+// the test binary's own os.Args. pflag ignores anything spelled `-test.…` and
+// nothing else, so a flag added here would be parsed as barracks' and fail the
+// very invocation this test is about.
+const envUpdateGolden = "BARRACKS_TEST_UPDATE_GOLDEN"
+
 // TestBareBarracksKeepsPrintingHelpOffATerminal is the non-TTY contract.
 //
 // barracks is run in scripts, pipes and CI. A full-screen program there would
 // write alternate-screen and cursor sequences into whatever is reading, then
 // wait forever for a key that is never coming. So the roster opens only when
-// stdout is a terminal, and every other bare invocation prints exactly the help
-// it printed before the roster existed.
+// stdout is a terminal, and every other bare invocation prints the help it
+// printed before the roster existed, plus the one line for the command the
+// roster added.
+//
+// The comparison is against the whole recorded body rather than a handful of
+// substrings on purpose. A substring assertion cannot see a line arriving or
+// leaving, which is exactly how `barracks [flags]` - a side effect of making
+// the root command runnable, wanted by nothing - reached this output and was
+// only caught by diffing against a binary built from the commit before. Any
+// change to what a bare barracks says off a terminal now has to be made here
+// too, deliberately: regenerate with BARRACKS_TEST_UPDATE_GOLDEN=1 set, and
+// read the diff it leaves in the working tree.
 func TestBareBarracksKeepsPrintingHelpOffATerminal(t *testing.T) {
 	h := newHarness(t)
 	h.tty = false
@@ -86,14 +107,53 @@ func TestBareBarracksKeepsPrintingHelpOffATerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bare barracks failed: %v (stderr %s)", err, errb)
 	}
-	for _, want := range []string{"barracks turns a pile of agent skills", "Available Commands:", "spawn"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("bare barracks off a terminal did not print help; missing %q:\n%s", want, out)
-		}
+	if errb != "" {
+		t.Errorf("bare barracks off a terminal wrote to stderr: %q", errb)
 	}
 	if strings.Contains(out, "\x1b") || strings.Contains(errb, "\x1b") {
 		t.Errorf("bare barracks off a terminal emitted an escape sequence:\nstdout %q\nstderr %q", out, errb)
 	}
+
+	golden := filepath.Join("testdata", "bare-help.golden")
+	if os.Getenv(envUpdateGolden) != "" {
+		if err := os.WriteFile(golden, []byte(out), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("rewrote %s", golden)
+		return
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("no recorded help to compare against: %v", err)
+	}
+	if out != string(want) {
+		t.Errorf("the help a bare barracks prints off a terminal changed:\n%s",
+			lineDiff(string(want), out))
+	}
+}
+
+// lineDiff reports the lines that differ between two bodies. The whole help is
+// forty lines, so a test that just printed both would bury the one line that
+// moved.
+func lineDiff(want, got string) string {
+	w, g := strings.Split(want, "\n"), strings.Split(got, "\n")
+	var b strings.Builder
+	for i := 0; i < len(w) || i < len(g); i++ {
+		var wl, gl string
+		if i < len(w) {
+			wl = w[i]
+		}
+		if i < len(g) {
+			gl = g[i]
+		}
+		if wl != gl {
+			fmt.Fprintf(&b, "line %d:\n  recorded %q\n  printed  %q\n", i+1, wl, gl)
+		}
+	}
+	if b.Len() == 0 {
+		return "(the bodies differ only in trailing content)"
+	}
+	return b.String()
 }
 
 // Printing help touches nothing. A bare barracks off a terminal does exactly
