@@ -37,6 +37,12 @@ type garrisonStage struct {
 // Changed reports whether this stage has anything to do or to say.
 func (g *garrisonStage) Changed() bool { return len(g.Behind) > 0 || g.Blocked }
 
+// Actionable reports whether applying this stage would write anything. A
+// blocked stage is reported and never applied, so it says something without
+// doing anything - which is the committed tier's half of the same question
+// upgrade.LoadoutPlan.Actionable answers for the personal one.
+func (g *garrisonStage) Actionable() bool { return !g.Blocked && len(g.Behind) > 0 }
+
 // planGarrisonUpgrades reads what the upgrade means for this repository's
 // committed tier, writing nothing.
 //
@@ -109,7 +115,7 @@ func (e *Env) applyGarrisonUpgrades(ctx context.Context, stages []*garrisonStage
 		return
 	}
 	for _, stage := range stages {
-		if stage.Blocked {
+		if !stage.Actionable() {
 			continue
 		}
 		stage.result, stage.err = e.garrisons.Reinstall(ctx, loc.Root, loc.GitDir, stage.next, false)

@@ -9,6 +9,7 @@ import (
 	"github.com/tobi404/barracks/internal/garrison"
 	"github.com/tobi404/barracks/internal/loadout"
 	"github.com/tobi404/barracks/internal/spawn"
+	"github.com/tobi404/barracks/internal/target"
 )
 
 // repoScope resolves the repository a committed-tier command acts on.
@@ -92,21 +93,9 @@ on this machine. Use barracks inspect to see whether a checkout needs it.`),
 			if err != nil {
 				return err
 			}
-			sel, err := env.selectTargetsFor(cmd.Context(), l, targetIDs, false, nil)
+			sel, err := env.garrisonSelection(cmd.Context(), loc, l, targetIDs)
 			if err != nil {
 				return err
-			}
-			// An existing garrison's recorded targets win over detection: an
-			// update must not quietly stop installing into an agent the
-			// repository already committed files for.
-			if existing := env.garrisonedTargets(loc.Root, l); len(existing) > 0 && len(targetIDs) == 0 && len(l.Targets) == 0 {
-				sel, err = env.selectTargetsFor(cmd.Context(), l, existing, false, nil)
-				if err != nil {
-					return err
-				}
-				fmt.Fprintf(env.Out, "targets: %s (recorded in %s)\n", strings.Join(sel.IDs(), ", "), garrison.LockName)
-			} else {
-				env.announceSelection(sel)
 			}
 
 			res, err := env.garrisons.Install(cmd.Context(), garrison.Request{
@@ -128,6 +117,30 @@ on this machine. Use barracks inspect to see whether a checkout needs it.`),
 	cmd.Flags().StringSliceVar(&targetIDs, "target", nil, targetFlagHelp("garrison into"))
 	cmd.Flags().BoolVar(&force, "force", false, "replace vendored files that have been edited since they were committed")
 	return cmd
+}
+
+// garrisonSelection decides which agents a garrison installs into, and says so.
+//
+// It is a rule of its own rather than plain target selection, and the roster
+// goes through it for the same reason the command does: an existing garrison's
+// recorded targets win over detection, because an update must not quietly stop
+// installing into an agent the repository already committed files for. Only an
+// explicit --target or the loadout's own declaration overrides that.
+func (e *Env) garrisonSelection(ctx context.Context, loc spawn.Location, l *loadout.Loadout, targetIDs []string) (target.Selection, error) {
+	sel, err := e.selectTargetsFor(ctx, l, targetIDs, false, nil)
+	if err != nil {
+		return target.Selection{}, err
+	}
+	if existing := e.garrisonedTargets(loc.Root, l); len(existing) > 0 && len(targetIDs) == 0 && len(l.Targets) == 0 {
+		sel, err = e.selectTargetsFor(ctx, l, existing, false, nil)
+		if err != nil {
+			return target.Selection{}, err
+		}
+		fmt.Fprintf(e.Out, "targets: %s (recorded in %s)\n", strings.Join(sel.IDs(), ", "), garrison.LockName)
+		return sel, nil
+	}
+	e.announceSelection(sel)
+	return sel, nil
 }
 
 // garrisonedTargets is the target list the lockfile records for a loadout.

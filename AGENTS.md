@@ -363,6 +363,18 @@ deliberate decision, not a refactor.
   everything *around* the roster stays covered without one. The one other thing that needs a
   loop is the terminal handover below, and `model.exec` is the seam for that: `tui.Frame`
   substitutes it and `FrameAndTerminal` returns what the order wrote while it was away.
+  **That harness is also blind to concurrency, so nothing reachable from a `tea.Cmd` may
+  touch state the model reads or writes.** `tui.Frame` runs every command inline on the test
+  goroutine, while Bubble Tea's `handleCommands` gives each one a goroutine of its own - so a
+  green `go test -race ./...` over `internal/tui` says nothing whatever about whether a
+  command shares state with `Update`. It has already cost one: a per-loadout memo of where a
+  deploy would go, added for the responsiveness of the picker, was cleared from the refresh
+  and recall commands while `Update` read the same map, and holding `R` down would have
+  killed barracks with `fatal error: concurrent map writes` - not a panic, so
+  `recoverFromPanic` could not catch it and the terminal would have been left in the
+  alternate screen. `cli.Env.deployTargets` therefore resolves live on every card and keeps
+  nothing; the picker is slower for it, and that is the trade. Do not rebuild that cache -
+  measure whether the resolve itself can be made cheap instead.
 - **The frame is the size of the terminal, and what does not fit is cut where it is built.**
   The alternate screen clips a larger frame rather than scrolling it, and a card is the
   easiest way to grow one, because the compositor's bounds are the union of its layers. So
@@ -379,15 +391,69 @@ deliberate decision, not a refactor.
   without it the dossier line under each card row keeps whatever tail the card does not cover -
   an orphaned word floating beside a REFUSED card, which reads as a rendering fault rather than
   as context. It has to be the band rather than the strings, because the line that overflows is
-  whichever one happens to be long.
+  whichever one happens to be long. A card's own **prose** is the one thing that is written to
+  fit rather than cut: every fixed sentence is inside `views.cardProse` (what a card has at 60
+  columns), because half a sentence ending in an ellipsis reads as a fault, and unlike a list
+  it cannot be counted instead of read. `TestNoCardCutsItsOwnProseInHalf` holds that, and holds
+  `cardProse` to what the narrowest terminal really gives.
+- **Every deployment verb the roster drives reaches the engine the command reaches, and the
+  guards come with it.** `garrison` goes through `cli.Env.repoScope` and
+  `cli.Env.garrisonSelection` - the rule that an existing garrison's recorded targets beat
+  detection, extracted so both surfaces obey one copy of it - and reports with the command's
+  own `printGarrison`. `run` goes through `cli.Env.runSession`, the body of the command with
+  the child's three streams passed in rather than taken from `Env`, because the two callers
+  hand it different terminals. `upgrade` calls `upgrade.Engine.Plan` and `.Apply` **separately**
+  and renders both with `renderUpgrade`/`renderGarrisonUpgrades`: the plan card *is* the
+  confirmation, which is why `u` is the one order that does not stop at `model.propose` - what
+  it starts writes nothing but store entries. `tui.Preview` carries the plan as a closure, so
+  the roster applies what it showed rather than deciding twice, and
+  `TestTheRostersUpgradePlanIsTheCommandsDryRun` compares the card's body line for line
+  against `barracks upgrade --dry-run`. An order needing no repository (`upgrade`) is gated
+  apart from the three that do, in `model.refuse`, which is where every gate lives.
+- **A verdict is reached in one place, or the two surfaces will eventually disagree about
+  it.** Whether an upgrade succeeded is `cli.upgradeVerdict`, which the command exits on and
+  the roster's `Outcome.Err` carries: a green `FRONTLINE UPGRADED` over an upgrade the
+  command would have failed is a report barracks cannot stand behind, and the user finds out
+  late, from the skills that never moved. Whether a deploy has a destination at all is
+  `Config.Selection`, which returns an error for exactly the loadouts `barracks spawn`
+  refuses; `tui.model.pickerFor` refuses on it rather than opening an empty picker, because
+  "nothing is ticked" is a state the user answers by ticking a box - which would turn a
+  declaration barracks could not read into an explicit `OriginFlag` override that quietly
+  succeeds. Reconstructing either judgement at the card is the bug, not the wording. The
+  same rule is why `tui.Preview` may carry a nil `Apply`: whether there is anything to carry
+  out is `upgrade.LoadoutPlan.Actionable` - the predicate `Apply` itself works from, a
+  definition to save or a spawn to reconcile - plus `cli.garrisonStage.Actionable` for the
+  committed half, and `cli.upgradeActionable` only asks them. Never answer it from
+  `SourcePlan.Status`: a move is planned for every source at the commit it is already pinned
+  at, so a plan in which *nothing resolved* still reconciles a spawn an earlier upgrade left
+  to a live session - reading "every source failed" as "nothing to do" is how that skip
+  becomes permanent.
+- **The deploy picker overrides only when the user actually picked.** `tui.picker.chosen`
+  returns nil until something is toggled, and nil reaches `target.Select` as no override at
+  all - so an untouched picker leaves the loadout's declaration and the repository's evidence
+  in charge, exactly as `barracks spawn` does, while the same list ticked by hand is
+  `OriginFlag` and overrides both. A picker that reported its opening state as a choice would
+  silently pin every deploy to whatever was detected the day it ran. The roster prints its own
+  reason for that case (`chosen on the roster`) because `target.Selection.Reason` says "given
+  on the command line", which is true of a flag and false of a full-screen picker; the engine
+  is untouched, only the sentence is the roster's. The menu itself is `target.Registry` via
+  `cli.targetOptions`, and the launch menu is the registry's own `Binaries` filtered by
+  `exec.LookPath` - an entry that is not installed is a key that does nothing, one step later.
 - **Nothing barracks writes to a stream may reach the alternate screen - and nothing may be
   dropped to keep it out.** While the roster owns the terminal, `cli.Env.captureStreams`
-  redirects `Env.Out` and `Env.Err` into a buffer, and `capturedLines` folds what they said
-  into the outcome panel; the store's progress reporter is swapped for one with `Live: false`
-  writing through `lineWriter` to wherever the order can be read. Both halves are the rule: a
-  report painted over the roster is corruption, and a path barracks refused to touch that
-  never reaches the user is worse. Every early return on an action path carries its notices
-  out too.
+  redirects `Env.Out` and `Env.Err` into **two** buffers, and `capturedReport`/`capturedNotices`
+  fold what they said into the outcome panel; `cli.Env.reportTo` swaps the store's progress
+  reporter for one with `Live: false` writing to the terminal the order was handed. Both
+  halves are the rule: a report painted over the roster is corruption, and a path barracks
+  refused to touch that never reaches the user is worse. Every early return on an action path
+  carries its notices out too. The buffers stay **two** because the card draws the same
+  distinction the streams already carry - stdout is the body, stderr is a notice, and a notice
+  is never elided before the body is - so folding them together would file every report as a
+  problem. They are drained as they are read, or the next order shows the last one's output
+  again. A `run` order is the one exception and inverts the rule: it starts an agent that owns
+  the terminal, so `cli.Env.tuiLaunch` points `Env.Out`/`Env.Err` *at* the session (tee'd into
+  a buffer, so the card can still say what was spawned and recalled) and hands the child the
+  session's own three streams. Capturing there would swallow the agent.
 - **An order that fetches runs with the terminal handed back to it, and nothing may turn that
   handover into an interrupt.** `tui.terminalJob` is a `tea.ExecCommand`, so Bubble Tea's own
   handover is what stops the renderer, leaves the alternate screen, restores the terminal,
@@ -406,8 +472,14 @@ deliberate decision, not a refactor.
   the restored line discipline turns `^C` back into a signal and the working screen exists
   precisely so work already underway cannot be interrupted; children still receive it, so
   cancelling a passphrase prompt fails the fetch and the engine rolls back and reports.
-  `cli.Env.tuiDeploy` keeps `Live: false` for the same reason it always had it, now sharper:
-  nothing barracks writes may erase a prompt it did not raise.
+  `cli.Env.reportTo` keeps `Live: false` for the same reason it always had it, now sharper:
+  nothing barracks writes may erase a prompt it did not raise. Every order that fetches or
+  starts a child goes through the one `terminalJob` - deploy, garrison, both halves of an
+  upgrade, and run - and `tui.Session` is why it carries all three streams rather than one
+  writer: an agent that cannot read the keyboard is not an agent. Proved by hand on a real
+  pty, not only in the suite: a fake `ssh` prompting for a key passphrase on `/dev/tty`
+  during a roster garrison and during an upgrade's resolve, visible and answerable both
+  times, and an agent launched from the roster reading a typed line and being recalled after.
 - **Bare `barracks` opens the roster only when stdout is a terminal it can own; `barracks tui`
   refuses in barracks' own wording.** Off a terminal a bare invocation prints the help it
   always printed plus the one line for the `tui` command, and nothing else - a full-screen

@@ -89,21 +89,53 @@ says to run "barracks garrison <loadout> --force" if you meant to replace it.
 			renderUpgrade(env, plans, dryRun)
 			committedOK := renderGarrisonUpgrades(env, stages, dryRun)
 
-			for _, p := range plans {
-				if p.Failed() {
-					return fmt.Errorf("some sources could not be upgraded")
-				}
-			}
-			if !committedOK {
-				return fmt.Errorf("the committed files could not be brought onto the new pins")
-			}
-			return nil
+			return upgradeVerdict(plans, committedOK)
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "show what would change without changing it")
 	cmd.Flags().BoolVar(&pin, "pin", false, "record the newly resolved commit as the source's declared ref")
 	cmd.Flags().BoolVar(&includeRunning, "include-running", false, "also relink spawns held by a running process")
 	return cmd
+}
+
+// upgradeVerdict is whether an upgrade succeeded, and it is the only place that
+// question is answered.
+//
+// The command exits non-zero on it and the roster draws REFUSED on it, so a
+// second reading of the same plans would be a second thing that can be wrong -
+// and wrong here means telling somebody a set of skills moved forward when it
+// did not, which they find out later, from the skills.
+func upgradeVerdict(plans []*upgrade.LoadoutPlan, committedOK bool) error {
+	for _, p := range plans {
+		if p.Failed() {
+			return fmt.Errorf("some sources could not be upgraded")
+		}
+	}
+	if !committedOK {
+		return fmt.Errorf("the committed files could not be brought onto the new pins")
+	}
+	return nil
+}
+
+// upgradeActionable reports whether carrying this upgrade out would do
+// anything, in either tier.
+//
+// Each half answers for itself - upgrade.LoadoutPlan for the definition and the
+// spawns, garrisonStage for the committed files - and this only asks them.
+// Working the answer out here from what the plan happens to say would be a
+// second opinion on somebody else's decision, and the two would drift.
+func upgradeActionable(plans []*upgrade.LoadoutPlan, stages []*garrisonStage) bool {
+	for _, p := range plans {
+		if p.Actionable() {
+			return true
+		}
+	}
+	for _, s := range stages {
+		if s.Actionable() {
+			return true
+		}
+	}
+	return false
 }
 
 // selectLoadouts resolves the command's arguments to loadouts, refusing the

@@ -34,6 +34,14 @@ const (
 	// of its own: two border rows, and the padding above and below.
 	cardWidthMax = 64
 	cardChrome   = 4
+
+	// cardProse is the columns a card's own sentences are written to fit: what
+	// cardText comes to on the narrowest terminal the roster claims to work on
+	// (60 columns). Every fixed line a card prints is written inside it, so the
+	// prose that explains an order is never cut off mid-sentence - a truncated
+	// sentence reads as a fault rather than as a description of what is about
+	// to happen, and unlike a list it cannot be counted instead of read.
+	cardProse = 48
 )
 
 func (m *model) View() tea.View {
@@ -364,6 +372,8 @@ func (m *model) overlay() string {
 		return m.confirmModal()
 	case screenWorking:
 		return m.workingModal()
+	case screenPreview:
+		return m.previewModal()
 	case screenOutcome:
 		return m.outcomeModal()
 	case screenHelp:
@@ -432,46 +442,191 @@ func (m *model) confirmModal() string {
 		return ""
 	}
 	text := m.cardText()
-	rows := []string{m.th.title.Render(strings.ToUpper(m.pending.verb()) + " ORDER"), ""}
+	sources := fmt.Sprintf("%d %s · %d %s",
+		len(u.Loadout.Equipment), plural(len(u.Loadout.Equipment), "source", "sources"),
+		u.SkillCount(), plural(u.SkillCount(), "skill", "skills"))
+
+	head := []string{m.th.title.Render(strings.ToUpper(m.pending.verb()) + " ORDER"), ""}
+	var body []string
+	line := func(s string) { body = append(body, m.th.body.Render(truncate(s, text))) }
+	dim := func(s string) { body = append(body, m.th.faint.Render(truncate(s, text))) }
+
+	// Every line below is written to fit cardProse columns, which is what a
+	// card has on the narrowest terminal the roster claims to work on. A card's
+	// prose is a sentence, and half a sentence ending in an ellipsis reads as a
+	// fault rather than as a description of what is about to happen.
 	switch m.pending {
 	case orderDeploy:
-		rows = append(rows,
-			m.th.body.Render(truncate(fmt.Sprintf("Send %s into %s?", u.Loadout.Name, filepath.Base(m.st.Root)), text)),
-			m.th.faint.Render(truncate(fmt.Sprintf("%d %s · %d %s · %s",
-				len(u.Loadout.Equipment), plural(len(u.Loadout.Equipment), "source", "sources"),
-				u.SkillCount(), plural(u.SkillCount(), "skill", "skills"),
-				targetLabel(u.Loadout)), text)),
-			m.th.faint.Render(truncate("Symlinks from the shared store. git status stays clean.", text)))
+		line(fmt.Sprintf("Send %s into %s?", u.Loadout.Name, filepath.Base(m.st.Root)))
+		dim(sources + " · " + targetLabel(u.Loadout))
+		dim("Symlinks from the shared store.")
+		dim("git status stays clean.")
 	case orderRecall:
-		rows = append(rows,
-			m.th.body.Render(truncate(fmt.Sprintf("Stand %s down from %s?", u.Loadout.Name, filepath.Base(m.st.Root)), text)),
-			m.th.faint.Render(truncate(fmt.Sprintf("%d live %s here.", len(u.Here), plural(len(u.Here), "spawn", "spawns")), text)))
+		line(fmt.Sprintf("Stand %s down from %s?", u.Loadout.Name, filepath.Base(m.st.Root)))
+		dim(fmt.Sprintf("%d live %s here.", len(u.Here), plural(len(u.Here), "spawn", "spawns")))
+		// The asymmetry is deliberate and is said out loud rather than left for
+		// somebody to discover: a recall from the roster is the personal tier
+		// only, because removing tracked files from a checkout is not something
+		// a single key press should do.
+		dim("Spawns only - a garrison stays where it is.")
+		dim("Remove that with: barracks recall " + u.Loadout.Name)
+	case orderGarrison:
+		line(fmt.Sprintf("Commit %s into %s?", u.Loadout.Name, filepath.Base(m.st.Root)))
+		dim(sources)
+		dim("Real files plus barracks.lock, tracked by git.")
+		dim("Everyone who clones this repository gets them.")
+		dim("Review the diff and commit it.")
+	case orderLaunch:
+		line(fmt.Sprintf("Run an agent with %s in %s?", u.Loadout.Name, filepath.Base(m.st.Root)))
+		dim(sources)
+		dim("Spawned for the session, recalled when it exits.")
 	}
-	rows = append(rows, "", m.th.faint.Render("y confirm   n stand down"))
-	return m.card(rows...)
+
+	foot := []string{"", m.th.faint.Render(m.confirmHint(text))}
+	if m.note != "" {
+		foot = append([]string{"", m.th.fail.Render(truncate(m.note, text))}, foot...)
+	}
+
+	// What gives way when the card cannot hold all of it. The picker is a
+	// choice, so it is never cut below the row the cursor is on - a choice you
+	// cannot see is a choice you cannot make - and the prose that explains the
+	// order is what shrinks first.
+	rows := m.cardRows()
+	choices := m.pickerRows(rows - len(head) - len(foot) - 1)
+	body = m.elide(body, rows-len(head)-len(foot)-len(choices))
+
+	out := append([]string{}, head...)
+	out = append(out, body...)
+	out = append(out, choices...)
+	out = append(out, foot...)
+	return m.card(out...)
+}
+
+// confirmHint is the line that says which keys this card answers to.
+//
+// It names the picker's key only when there is something to pick, because a
+// card that advertises a key it ignores is the same failure as a key that does
+// nothing. And it says as much as the card is wide enough to hold on one line:
+// this is the only thing on the card that says how to leave it, so it may never
+// be the line that wraps into a row the card did not budget for, and it may
+// never be truncated into "n stand…" either. The last form always fits, because
+// no card is drawn narrower than it.
+func (m *model) confirmHint(width int) string {
+	forms := []string{"y confirm   n stand down"}
+	if len(m.pick.options) > 0 {
+		forms = []string{
+			"space choose   ↑/↓ move   y confirm   n stand down",
+			"space choose · y confirm · n stand down",
+			"space · y · n stand down",
+		}
+	}
+	for _, f := range forms {
+		if len([]rune(f)) <= width {
+			return f
+		}
+	}
+	return forms[len(forms)-1]
+}
+
+// pickerRows is the picker's own band of the card, in at most n rows, or none
+// when there is nothing to choose.
+//
+// The heading and the "showing this many" line are paid for out of n before a
+// single option is drawn, for the reason every producer budgets for itself: the
+// compositor's bounds are the union of its layers, so a card that overran here
+// would take the whole frame off the screen with it.
+func (m *model) pickerRows(n int) []string {
+	if len(m.pick.options) == 0 || n < 3 {
+		return nil
+	}
+	text := m.cardText()
+	title := "TARGETS"
+	if !m.pick.multi {
+		title = "AGENT"
+	}
+	rows := []string{"", m.th.label.Render(title)}
+	budget := n - len(rows)
+	first, last := m.pick.window(budget)
+	if last-first < len(m.pick.options) {
+		budget--
+		first, last = m.pick.window(budget)
+	}
+	for i := first; i < last; i++ {
+		o := m.pick.options[i]
+		box := "[ ]"
+		if m.pick.on[i] {
+			box = "[x]"
+		}
+		cursor := "  "
+		style := m.th.body
+		if i == m.pick.cursor {
+			cursor, style = "▸ ", m.th.cursor
+		}
+		row := cursor + box + " " + o.Label
+		if o.Note != "" {
+			row += "  (" + o.Note + ")"
+		}
+		rows = append(rows, style.Render(truncate(row, text)))
+	}
+	if last-first < len(m.pick.options) {
+		rows = append(rows, m.th.faint.Render(fmt.Sprintf("  %d-%d of %d", first+1, last, len(m.pick.options))))
+	}
+	return rows
 }
 
 func (m *model) workingModal() string {
 	return m.card(
-		m.sp.View()+" "+m.th.title.Render("MOVING OUT"),
+		m.sp.View()+" "+m.th.title.Render(m.working.working()),
 		"",
 		m.th.faint.Render("forming up..."))
 }
 
+// previewModal is the plan an upgrade would carry out, shown before any of it
+// is carried out.
+//
+// The body is whatever the upgrade reported for itself, so the roster and
+// `barracks upgrade --dry-run` describe a run in the same words - there is only
+// one plan and only one renderer of it.
+func (m *model) previewModal() string {
+	text := m.cardText()
+	head := []string{m.th.title.Render(strings.ToUpper(m.result.Title)), ""}
+	foot := []string{"", m.th.faint.Render("y carry it out   n stand down")}
+	return m.card(m.reportCard(head, foot, text)...)
+}
+
 func (m *model) outcomeModal() string {
 	text := m.cardText()
-
-	var head, body []string
+	var head []string
 	if m.result.Err != nil {
 		head = append(head, m.th.fail.Render("REFUSED"), "")
+	} else {
+		head = append(head, m.th.ok.Render(strings.ToUpper(m.result.Title)), "")
+	}
+	foot := []string{"", m.th.faint.Render("any key to return to the roster")}
+	return m.card(m.reportCard(head, foot, text)...)
+}
+
+// reportCard lays out what an order reported - its body and its notices -
+// between a head and a foot neither of which may ever be cut.
+//
+// It is shared by the outcome card and the plan card because the two hold the
+// same three things and have to give way in the same order. What gives way when
+// the card cannot hold all of it: a notice is a path barracks declined to touch
+// and is the last thing that may go; the foot is the only thing that says how
+// to leave the card at all. The body is a list of what moved, and a list can be
+// counted instead of read, so it is what is cut - never those two. The one row
+// held back for it is the difference between a card that says twenty-two skills
+// are not shown and a card on which they were never mentioned.
+func (m *model) reportCard(head, foot []string, text int) []string {
+	var body []string
+	if m.result.Err != nil {
+		// A barracks error names a path, so it is wrapped rather than cut.
 		for _, line := range strings.Split(wrap(m.result.Err.Error(), text), "\n") {
 			body = append(body, m.th.body.Render(line))
 		}
-	} else {
-		head = append(head, m.th.ok.Render(strings.ToUpper(m.result.Title)), "")
-		for _, line := range m.result.Lines {
-			body = append(body, m.th.body.Render(truncate(line, text)))
-		}
+	}
+	for _, line := range m.result.Lines {
+		body = append(body, m.th.body.Render(truncate(line, text)))
 	}
 
 	// A notice is wrapped rather than cut, for the reason wrap exists: it names
@@ -482,26 +637,17 @@ func (m *model) outcomeModal() string {
 			notices = append(notices, m.th.fail.Render(line))
 		}
 	}
-	foot := []string{"", m.th.faint.Render("any key to return to the roster")}
 
-	// What gives way when the card cannot hold all of it, in order. A notice is
-	// a path barracks declined to touch and is the last thing that may go; the
-	// hint is the only thing that says how to leave this card at all. The body
-	// is a list of what a spawn installed, and a list can be counted instead of
-	// read, so it is what is cut - never those two. The one row held back for it
-	// is the difference between a card that says twenty-two skills are not shown
-	// and a card on which they were never mentioned.
 	rows := m.cardRows()
 	keep := minInt(1, len(body))
 	notices = m.elide(notices, rows-len(head)-len(foot)-keep)
 	body = m.elide(body, rows-len(head)-len(notices)-len(foot))
 
-	var out []string
-	out = append(out, head...)
+	out := append([]string{}, head...)
 	out = append(out, body...)
 	out = append(out, notices...)
 	out = append(out, foot...)
-	return m.card(out...)
+	return out
 }
 
 func (m *model) helpModal() string {

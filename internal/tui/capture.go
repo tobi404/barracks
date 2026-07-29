@@ -111,8 +111,31 @@ func keyPress(name string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":
 		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
+	case "pgup":
+		return tea.KeyPressMsg{Code: tea.KeyPgUp}
+	case "pgdown":
+		return tea.KeyPressMsg{Code: tea.KeyPgDown}
+	case "space":
+		// The name a binding is written in and the key the terminal sends are
+		// not the same string for this one, and a harness that took the name
+		// literally would press "s" instead - which is the deploy key.
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	}
+	if mod, ok := strings.CutPrefix(name, "ctrl+"); ok && len([]rune(mod)) == 1 {
+		return tea.KeyPressMsg{Code: []rune(mod)[0], Mod: tea.ModCtrl}
 	}
 	r := []rune(name)
+	if len(r) > 1 {
+		// Every remaining name is a single character, so a longer one is a key
+		// this harness does not know how to press. Falling through would send
+		// its first rune instead - "right" would press `r`, the recall key -
+		// and a test naming that key would quietly prove something else.
+		panic("tui: no key press is known for " + name)
+	}
 	k := tea.KeyPressMsg{Code: r[0], Text: name}
 	if len(r) == 1 && r[0] >= 'A' && r[0] <= 'Z' {
 		// A capital arrives as the shifted lower-case key; Bubble Tea reports
