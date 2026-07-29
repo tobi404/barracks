@@ -103,8 +103,17 @@ func defaultKeys() keymap {
 // key that is not there is the honest shape of a surface that does not do the
 // thing yet. Those verbs remain commands until the roster genuinely runs them.
 
+// ShortHelp is the footer bar, and its order is the whole point of it.
+//
+// The help elides from the end when the bar is wider than the terminal, so the
+// order decides what a narrow screen stops advertising. The two keys that get a
+// user out - `q`, and `?`, which is where every other key is written down - come
+// first and are never the ones that go; the movement keys come last, because
+// arrows and a cursor are the one thing a roster does not have to explain. It
+// puts `q dismissed` at the left edge, which is not where a footer conventionally
+// ends: that is the trade, and it is deliberate.
 func (k keymap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Deploy, k.Recall, k.Refresh, k.Help, k.Quit}
+	return []key.Binding{k.Quit, k.Help, k.Deploy, k.Recall, k.Refresh, k.Up, k.Down}
 }
 
 func (k keymap) FullHelp() [][]key.Binding {

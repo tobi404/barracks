@@ -308,7 +308,6 @@ func TestTheFrameNeverOutgrowsTheTerminal(t *testing.T) {
 		fits(t, got, w, h, fmt.Sprintf("%dx%d roster", w, h))
 		for _, want := range []string{
 			"carries nothing", // the status line
-			"up the line",     // the help bar
 			"parse loadout",   // the unreadable record, which must never be dropped
 			"of 30",           // the count that says the roster is windowed
 		} {
@@ -317,16 +316,29 @@ func TestTheFrameNeverOutgrowsTheTerminal(t *testing.T) {
 			}
 		}
 	}
+}
 
-	// A help bar too long for the terminal is elided by the help itself, with
-	// the ellipsis that says so. Letting it run on instead would widen the whole
-	// frame, and the terminal would cut the same keys off without a word.
-	wide := plain(Frame(cfgFor(r), 120, 30, "s"))
-	if !strings.Contains(wide, "q dismissed") {
-		t.Errorf("a terminal wide enough for the whole help bar did not get it:\n%s", wide)
-	}
-	if narrow := plain(Frame(cfgFor(r), 70, 16, "s")); !strings.Contains(narrow, "…") {
-		t.Errorf("a help bar too wide for the terminal was cut without saying so:\n%s", narrow)
+// The footer must name the way out, on every terminal anyone actually uses.
+//
+// The help bar is elided from the end when it is wider than the screen, so which
+// entries survive is decided by the order ShortHelp returns them in - and 80
+// columns has room for about six of the seven. What must never be among the ones
+// that go is `q dismissed` and `? orders`: the first is how you leave the roster,
+// the second is the only other place every key is written down. This is a
+// statement about what may not be elided, not about what the bar happens to hold
+// today, so it is asserted at the width the question is really about.
+func TestTheFooterAlwaysNamesTheWayOut(t *testing.T) {
+	r := fakeRecords{root: "/repo", loadouts: []*loadout.Loadout{unitLoadout("alpha", "a")}}
+
+	for _, size := range [][2]int{{80, 24}, {60, 20}, {70, 16}, {100, 30}, {160, 50}} {
+		w, h := size[0], size[1]
+		got := plain(Frame(cfgFor(r), w, h))
+		fits(t, got, w, h, fmt.Sprintf("%dx%d footer", w, h))
+		for _, want := range []string{"q dismissed", "? orders"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%dx%d: the footer never says %q, so the roster does not advertise how to leave it:\n%s", w, h, want, got)
+			}
+		}
 	}
 }
 
