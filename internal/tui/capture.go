@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -21,18 +22,38 @@ import (
 // directives:
 //
 //	@size:WxH  resize the terminal mid-script
-//	@work      run every command the model has returned so far and deliver only
-//	           the progress they reported while running, holding their results
+//	@work      run every command the model has returned so far, holding their
+//	           results, which is what makes the in-flight screen capturable
 //	@pump      the same, and deliver the held results too
-//
-// Without an @pump a command the model returned is left un-run, which is what
-// makes the in-flight screen capturable at all; @work is the frame in between,
-// where the work has reported something but has not finished.
 func Frame(cfg Config, w, h int, script ...string) string {
+	frame, _ := FrameAndTerminal(cfg, w, h, script...)
+	return frame
+}
+
+// FrameAndTerminal is Frame plus everything an order wrote to the terminal
+// while the roster had handed it back.
+//
+// An order that fetches runs with the screen given up - see terminalJob - so
+// what it reported is not on the frame at all, and a harness that could not see
+// it could not tell a talkative order from a silent one. The handover itself is
+// run in process here, because it is the one part of a session that needs a
+// program loop; everything either side of it is the model a real run drives.
+func FrameAndTerminal(cfg Config, w, h int, script ...string) (string, string) {
 	m := newModel(cfg)
 
-	var produced []tea.Msg
-	m.out.bind(func(msg tea.Msg) { produced = append(produced, msg) })
+	var released bytes.Buffer
+	m.exec = func(c tea.ExecCommand, fn tea.ExecCallback) tea.Cmd {
+		return func() tea.Msg {
+			c.SetStdin(strings.NewReader(""))
+			c.SetStdout(&released)
+			c.SetStderr(&released)
+			err := c.Run()
+			if fn == nil {
+				return nil
+			}
+			return fn(err)
+		}
+	}
 
 	var pending []tea.Cmd
 	var held []tea.Msg
@@ -50,13 +71,6 @@ func Frame(cfg Config, w, h int, script ...string) string {
 				held = append(held, msg)
 			}
 		}
-		// Anything the command reported while it ran arrives first, in the
-		// order it was reported, exactly as the program's own loop would have
-		// taken it.
-		for _, p := range produced {
-			deliver(p)
-		}
-		produced = nil
 		if !results {
 			return
 		}
@@ -83,7 +97,7 @@ func Frame(cfg Config, w, h int, script ...string) string {
 			deliver(keyPress(step))
 		}
 	}
-	return m.View().Content
+	return m.View().Content, released.String()
 }
 
 // keyPress turns a key name into the message the terminal would have sent.

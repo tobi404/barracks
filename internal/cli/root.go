@@ -75,6 +75,16 @@ versions with no barracks installed.
 			// Recorded before init, because the progress reporter it builds is
 			// gated on it too.
 			env.quiet = quiet
+			// Printing help touches nothing. Only the root command has no
+			// parent, and a bare `barracks` that cannot open the roster does
+			// exactly what it did before the roster existed: it prints the help
+			// and exits 0. Initialising here would create the barracks data
+			// directories as a side effect of asking for help, and would turn a
+			// machine where they cannot be created into `barracks: <err>` and
+			// exit 1 where help is what was asked for.
+			if cmd.Parent() == nil && !env.canOpenTheRoster() {
+				return nil
+			}
 			return env.init()
 		},
 		// Cobra skips every PostRun once RunE has returned an error, which is

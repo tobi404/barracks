@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,8 +45,13 @@ type fakeRecords struct {
 func (f fakeRecords) Loadouts() ([]*loadout.Loadout, []error) { return f.loadouts, f.problems }
 func (f fakeRecords) Leases() ([]*lease.Lease, []error)       { return f.leases, f.lerr }
 func (f fakeRecords) Root() string                            { return f.root }
-func (f fakeRecords) Garrisons(string) ([]garrison.Garrison, error) {
-	return f.garrisons, f.gerr
+func (f fakeRecords) Garrisons(string) (*garrison.Manifest, error) {
+	if f.gerr != nil {
+		// Exactly what garrison.Load hands back when it cannot read the
+		// lockfile: the error and nothing else.
+		return nil, f.gerr
+	}
+	return &garrison.Manifest{Version: garrison.Version, Garrisons: f.garrisons}, nil
 }
 
 func unitLoadout(name string, skills ...string) *loadout.Loadout {
@@ -116,6 +122,44 @@ func TestGatherSeparatesHereFromAfieldAndCommitted(t *testing.T) {
 	}
 	if byName["reserves"].Deployed() {
 		t.Error("an unequipped loadout reported itself deployed")
+	}
+}
+
+// Which lockfile entry belongs to a loadout is the lockfile's own rule, and the
+// roster asks it rather than comparing names. A loadout garrisoned into two
+// clones and then renamed leaves the other clone's barracks.lock carrying the
+// old name and the same identity - `barracks deployed` matches that, and a
+// roster that did not would call a committed unit "in reserve". The other half
+// matters just as much: an entry written before identities existed carries none
+// at all, and that absence must never read as a mismatch.
+func TestAGarrisonIsMatchedTheWayTheLockfileMatchesIt(t *testing.T) {
+	renamed := unitLoadout("vanguard", "a") // trained as "frontline", renamed here
+	legacy := unitLoadout("siegeworks", "b")
+	imposter := unitLoadout("scouts", "c")
+
+	st := gather(fakeRecords{
+		root:     "/repo",
+		loadouts: []*loadout.Loadout{renamed, legacy, imposter},
+		garrisons: []garrison.Garrison{
+			{Loadout: "frontline", ID: renamed.ID, Targets: []string{"claude"}},
+			{Loadout: "siegeworks", Targets: []string{"claude"}},
+			{Loadout: "scouts", ID: "id-somebody-elses-scouts", Targets: []string{"claude"}},
+		},
+	})
+	byName := map[string]unit{}
+	for _, u := range st.Units {
+		byName[u.Loadout.Name] = u
+	}
+	if got := byName["vanguard"].Committed; got == nil {
+		t.Error("a renamed loadout did not find the garrison recorded under its old name")
+	} else if got.Loadout != "frontline" {
+		t.Errorf("the wrong garrison attached: %q", got.Loadout)
+	}
+	if byName["siegeworks"].Committed == nil {
+		t.Error("an entry written before identities existed was read as a mismatch")
+	}
+	if byName["scouts"].Committed != nil {
+		t.Error("a garrison whose identity disagrees was attributed to this loadout anyway")
 	}
 }
 
@@ -239,6 +283,44 @@ func TestLongRosterWindowsAroundTheCursor(t *testing.T) {
 	}
 }
 
+// A pane pads to the height it declares but never truncates, so a pane that
+// draws more rows than it has grows the whole frame and the terminal cuts the
+// bottom off: first the status line, which is the roster's only channel for a
+// refusal, then the help bar. Everything that could push it over is on screen
+// here at once - a roster too long to fit, an unreadable record, and a refused
+// order - and all three have to survive on a terminal nobody would call large.
+func TestTheFrameNeverOutgrowsTheTerminal(t *testing.T) {
+	var ls []*loadout.Loadout
+	for i := 0; i < 30; i++ {
+		ls = append(ls, unitLoadout(fmt.Sprintf("unit-%02d", i)))
+	}
+	r := fakeRecords{
+		root:     "/repo",
+		loadouts: ls,
+		problems: []error{errors.New("parse loadout broken: bad yaml")},
+	}
+
+	for _, size := range [][2]int{{80, 24}, {100, 20}, {120, 30}, {70, 16}} {
+		w, h := size[0], size[1]
+		// "s" on a unit that carries nothing is a refusal, and the status line
+		// is the only place the roster can put one.
+		got := plain(Frame(cfgFor(r), w, h, "s"))
+		if n := len(strings.Split(got, "\n")); n > h {
+			t.Errorf("%dx%d: the frame is %d rows tall, so the terminal clips %d of them:\n%s", w, h, n, n-h, got)
+		}
+		for _, want := range []string{
+			"carries nothing", // the status line
+			"dismissed",       // the last entry in the help bar
+			"parse loadout",   // the unreadable record, which must never be dropped
+			"of 30",           // the count that says the roster is windowed
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%dx%d: %q fell off the frame:\n%s", w, h, want, got)
+			}
+		}
+	}
+}
+
 func TestHelpOverlayOpensAndCloses(t *testing.T) {
 	r := fakeRecords{root: "/repo", loadouts: []*loadout.Loadout{unitLoadout("alpha")}}
 	if got := plain(Frame(cfgFor(r), 100, 24, "?")); !strings.Contains(got, "ORDERS") {
@@ -352,7 +434,11 @@ func TestDeployAsksBeforeItActs(t *testing.T) {
 	}
 }
 
-func TestDeployShowsProgressWhileItRunsAndTheOutcomeAfter(t *testing.T) {
+// A deploy runs with the terminal handed back to it, so what it reports goes to
+// the terminal and not to the screen the roster has given up. Both halves are
+// the test: the in-flight screen is still what a frame drawn mid-order shows,
+// and every line the order reported is on the terminal the user is looking at.
+func TestDeployReportsOnTheTerminalItWasHandedAndTheOutcomeAfter(t *testing.T) {
 	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", "a", "b")}}
 	d := &deployTracker{report: []string{
 		"github.com/unit/frontline  fetching…",
@@ -361,14 +447,17 @@ func TestDeployShowsProgressWhileItRunsAndTheOutcomeAfter(t *testing.T) {
 	cfg := cfgFor(r)
 	cfg.Deploy = d.deploy
 
-	working := plain(Frame(cfg, 110, 30, "s", "y", "@work"))
-	if !strings.Contains(working, "MOVING OUT") {
+	frame, released := FrameAndTerminal(cfg, 110, 30, "s", "y", "@work")
+	if working := plain(frame); !strings.Contains(working, "MOVING OUT") {
 		t.Fatalf("no in-flight screen:\n%s", working)
 	}
 	for _, line := range d.report {
-		if !strings.Contains(working, strings.TrimPrefix(line, "✓ ")[:20]) {
-			t.Errorf("progress line %q never reached the screen:\n%s", line, working)
+		if !strings.Contains(released, line) {
+			t.Errorf("progress line %q never reached the terminal:\n%s", line, released)
 		}
+	}
+	if strings.Contains(plain(frame), "fetching") {
+		t.Errorf("an order drew on the screen it had handed back:\n%s", plain(frame))
 	}
 
 	done := plain(Frame(cfg, 110, 30, "s", "y", "@pump"))
@@ -495,15 +584,62 @@ func TestRunOpensAndLeavesOnQ(t *testing.T) {
 	}
 }
 
-func TestEmitterDropsWhatItCannotDeliver(t *testing.T) {
-	var e emitter
-	e.emit(progressMsg{"nobody is listening"}) // must not panic
+// The handover is Bubble Tea's, but what barracks makes of its result is not: a
+// terminal that could not be released means the order never ran, and a terminal
+// that came back imperfectly after it did is a notice about a spawn that is
+// standing there either way.
+func TestAHandoverFailureIsToldApartFromARefusal(t *testing.T) {
+	boom := errors.New("could not release the terminal")
 
-	got := make(chan tea.Msg, 1)
-	e.bind(func(m tea.Msg) { got <- m })
-	e.emit(progressMsg{"heard"})
-	if msg := <-got; msg.(progressMsg).line != "heard" {
-		t.Errorf("emitter delivered %v", msg)
+	never := &terminalJob{run: func(io.Writer) Outcome { return Outcome{Title: "unreachable"} }}
+	msg := never.done(boom).(doneMsg)
+	if msg.out.Err == nil || !strings.Contains(msg.out.Err.Error(), "release the terminal") {
+		t.Errorf("an order that never ran was not reported as refused: %+v", msg.out)
+	}
+	if msg.out.Title != "" {
+		t.Errorf("an order that never ran reported a title: %q", msg.out.Title)
+	}
+
+	ran := &terminalJob{run: func(w io.Writer) Outcome {
+		fmt.Fprintln(w, "fetching…")
+		return Outcome{Title: "frontline deployed"}
+	}}
+	ran.SetStdout(io.Discard)
+	if err := ran.Run(); err != nil {
+		t.Fatalf("a refusing order must not fail the handover: %v", err)
+	}
+	msg = ran.done(boom).(doneMsg)
+	if msg.out.Err != nil {
+		t.Errorf("a completed order was turned into a refusal: %v", msg.out.Err)
+	}
+	if len(msg.out.Notices) != 1 || !strings.Contains(msg.out.Notices[0], "release the terminal") {
+		t.Errorf("the handover's own trouble was swallowed: %+v", msg.out.Notices)
+	}
+}
+
+// An order the roster hands the terminal to must not become the interrupt the
+// roster refuses to offer: on the alternate screen ^C is a key press the working
+// screen ignores, and handing the terminal back restores the line discipline
+// that turns it into a signal. A ^C at a child's prompt has to reach the child
+// and leave barracks to finish - or roll back - what it started.
+func TestAnInterruptDoesNotKillWorkUnderway(t *testing.T) {
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Skipf("cannot signal this process: %v", err)
+	}
+	caught, release := holdInterrupts()
+	defer release()
+
+	// If this hold is ever lost, the signal below kills the test binary. That
+	// is the failure, stated as loudly as it deserves: the same ^C would have
+	// killed barracks halfway through writing somebody's skills.
+	if err := self.Signal(os.Interrupt); err != nil {
+		t.Skipf("this platform cannot raise an interrupt: %v", err)
+	}
+	select {
+	case <-caught:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the interrupt was never delivered")
 	}
 }
 

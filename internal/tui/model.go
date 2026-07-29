@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
@@ -47,7 +48,6 @@ func (o order) verb() string {
 type model struct {
 	cfg Config
 	th  theme
-	out *emitter
 
 	st     state
 	cursor int
@@ -56,7 +56,6 @@ type model struct {
 
 	scr     screen
 	pending order
-	working []string
 	result  Outcome
 	status  string
 
@@ -64,6 +63,12 @@ type model struct {
 	vp   viewport.Model
 	help help.Model
 	keys keymap
+
+	// exec runs an order that has to own the terminal, and is Bubble Tea's own
+	// handover - see terminalJob. It is a field only so the capture harness can
+	// run the same job in process: the message tea.Exec produces is unexported,
+	// so a test can neither build one nor look inside one.
+	exec func(tea.ExecCommand, tea.ExecCallback) tea.Cmd
 }
 
 type keymap struct {
@@ -119,11 +124,11 @@ func newModel(cfg Config) *model {
 	m := &model{
 		cfg:  cfg,
 		th:   newTheme(dark),
-		out:  &emitter{},
 		sp:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		vp:   viewport.New(),
 		help: help.New(),
 		keys: defaultKeys(),
+		exec: tea.Exec,
 	}
 	m.st = gather(cfg.Records)
 	return m
@@ -131,9 +136,6 @@ func newModel(cfg Config) *model {
 
 // refreshedMsg carries a re-read of every record back to the model.
 type refreshedMsg struct{ st state }
-
-// progressMsg is one line the layer doing the work reported while it ran.
-type progressMsg struct{ line string }
 
 // doneMsg is an action's result.
 type doneMsg struct{ out Outcome }
@@ -164,10 +166,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = maxInt(0, len(m.st.Units)-1)
 		}
 		m.layout()
-		return m, nil
-
-	case progressMsg:
-		m.working = append(m.working, msg.line)
 		return m, nil
 
 	case doneMsg:
@@ -209,7 +207,6 @@ func (m *model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	case screenOutcome:
 		m.scr = screenRoster
-		m.working = nil
 		return nil
 
 	case screenHelp:
@@ -277,23 +274,28 @@ func (m *model) start() tea.Cmd {
 	o := m.pending
 	m.pending = orderNone
 	m.scr = screenWorking
-	m.working = nil
 	m.status = ""
 
 	l := u.Loadout
-	out := m.out
 	cfg := m.cfg
-	return func() tea.Msg {
-		switch o {
-		case orderDeploy:
-			return doneMsg{cfg.Deploy(context.Background(), l, func(line string) {
-				out.emit(progressMsg{line})
-			})}
-		case orderRecall:
-			return doneMsg{cfg.Recall(context.Background(), l)}
-		}
-		return doneMsg{Outcome{Title: "nothing to do"}}
+	switch o {
+	case orderDeploy:
+		// A deploy fetches, so it is run with the terminal handed back to it -
+		// see terminalJob for what that is guarding against. Everything it
+		// reports goes to the terminal it now owns, which is also where any
+		// prompt a child of it raises will be, and answerable.
+		job := &terminalJob{run: func(w io.Writer) Outcome {
+			return cfg.Deploy(context.Background(), l, func(line string) {
+				fmt.Fprintln(w, line)
+			})
+		}}
+		return m.exec(job, job.done)
+	case orderRecall:
+		// A recall reads records and removes symlinks. It starts no child, so
+		// it keeps the screen and the roster keeps drawing.
+		return func() tea.Msg { return doneMsg{cfg.Recall(context.Background(), l)} }
 	}
+	return func() tea.Msg { return doneMsg{Outcome{Title: "nothing to do"}} }
 }
 
 func (m *model) refresh() tea.Cmd {

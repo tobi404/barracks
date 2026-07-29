@@ -12,7 +12,6 @@ package tui
 import (
 	"context"
 	"io"
-	"sync"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -25,6 +24,10 @@ type Config struct {
 	Records reader
 	// Deploy spawns a loadout into the repository the TUI was launched from.
 	// Progress lines the operation reports are handed to report as they happen.
+	//
+	// It runs with the terminal handed back to it - see terminalJob - so report
+	// is written to the terminal rather than drawn on the roster, and anything
+	// it starts may prompt there and be answered.
 	Deploy func(ctx context.Context, l *loadout.Loadout, report func(string)) Outcome
 	// Recall removes every spawn of a loadout in this scope.
 	Recall func(ctx context.Context, l *loadout.Loadout) Outcome
@@ -58,32 +61,6 @@ type Outcome struct {
 	Err error
 }
 
-// emitter carries messages from an action's goroutine into the program.
-//
-// It exists because progress is reported by the layer doing the work, which
-// knows nothing about Bubble Tea, and because the program does not exist yet
-// when the model is built. A zero emitter drops what it is given, which is what
-// a test that does not care about progress gets.
-type emitter struct {
-	mu   sync.Mutex
-	send func(tea.Msg)
-}
-
-func (e *emitter) bind(send func(tea.Msg)) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.send = send
-}
-
-func (e *emitter) emit(msg tea.Msg) {
-	e.mu.Lock()
-	send := e.send
-	e.mu.Unlock()
-	if send != nil {
-		send(msg)
-	}
-}
-
 // Run opens the roster and blocks until the user leaves it.
 func Run(ctx context.Context, cfg Config) error {
 	m := newModel(cfg)
@@ -98,8 +75,6 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.Width > 0 && cfg.Height > 0 {
 		opts = append(opts, tea.WithWindowSize(cfg.Width, cfg.Height))
 	}
-	p := tea.NewProgram(m, opts...)
-	m.out.bind(p.Send)
-	_, err := p.Run()
+	_, err := tea.NewProgram(m, opts...).Run()
 	return err
 }

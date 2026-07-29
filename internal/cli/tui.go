@@ -29,12 +29,8 @@ func (r records) Loadouts() ([]*loadout.Loadout, []error) { return r.env.loadout
 func (r records) Leases() ([]*lease.Lease, []error)       { return r.env.leases.List() }
 func (r records) Root() string                            { return r.root }
 
-func (r records) Garrisons(root string) ([]garrison.Garrison, error) {
-	m, err := garrison.Load(root)
-	if err != nil {
-		return nil, err
-	}
-	return m.Garrisons, nil
+func (r records) Garrisons(root string) (*garrison.Manifest, error) {
+	return garrison.Load(root)
 }
 
 // runTUI opens the full-screen roster.
@@ -75,18 +71,23 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 // tuiDeploy is `barracks spawn <loadout>` with its report captured rather than
 // printed. It goes through the same engine and the same target selection, so a
 // spawn made here is indistinguishable on disk from one made at the prompt.
+//
+// The roster runs this with the terminal handed back to it, so report reaches
+// the terminal rather than the screen; internal/tui owns that decision and this
+// only says what happened.
 func (e *Env) tuiDeploy(ctx context.Context, l *loadout.Loadout, report func(string)) tui.Outcome {
 	restore := e.captureStreams()
 	defer restore()
 
 	// The store's progress reporter normally animates on stderr. Here it writes
-	// into the roster instead, one plain line at a time - Live is false, so it
-	// emits no escape sequence that could reach the alternate screen.
+	// one plain line at a time instead - Live is false, so it emits no escape
+	// sequence at all, which is what a terminal that may be about to carry a
+	// child's password prompt needs: nothing barracks writes may erase it.
 	//
 	// The reveal delay is dropped to nothing on purpose. It exists so a fast
-	// operation in a scrolling terminal does not flash a line and erase it; the
-	// roster has already put a modal up and committed the space, so there is
-	// nothing left to flicker and every step is worth showing.
+	// operation in a scrolling terminal does not flash a line and erase it, and
+	// an append-only reporter erases nothing; a user watching a screen barracks
+	// has just taken away from them is owed every step of what it is doing.
 	previous := e.store.Progress
 	e.store.Progress = &progress.Reporter{W: lineWriter(report), Live: false, Reveal: time.Nanosecond}
 	defer func() { e.store.Progress = previous }()

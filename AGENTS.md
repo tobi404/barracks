@@ -360,14 +360,37 @@ deliberate decision, not a refactor.
   that harness, and is deliberately kept - golden frames are how the layout is asserted).
   Needing a deadline in one of these tests means the design drifted. `Run` is the only part
   that opens a program loop, and `cli.Env.openRoster` is the seam a test replaces so
-  everything *around* the roster stays covered without one.
+  everything *around* the roster stays covered without one. The one other thing that needs a
+  loop is the terminal handover below, and `model.exec` is the seam for that: `tui.Frame`
+  substitutes it and `FrameAndTerminal` returns what the order wrote while it was away.
 - **Nothing barracks writes to a stream may reach the alternate screen - and nothing may be
   dropped to keep it out.** While the roster owns the terminal, `cli.Env.captureStreams`
   redirects `Env.Out` and `Env.Err` into a buffer, and `capturedLines` folds what they said
   into the outcome panel; the store's progress reporter is swapped for one with `Live: false`
-  writing through `lineWriter` into the model. Both halves are the rule: a report painted over
-  the roster is corruption, and a path barracks refused to touch that never reaches the user
-  is worse. Every early return on an action path carries its notices out too.
+  writing through `lineWriter` to wherever the order can be read. Both halves are the rule: a
+  report painted over the roster is corruption, and a path barracks refused to touch that
+  never reaches the user is worse. Every early return on an action path carries its notices
+  out too.
+- **An order that fetches runs with the terminal handed back to it, and nothing may turn that
+  handover into an interrupt.** `tui.terminalJob` is a `tea.ExecCommand`, so Bubble Tea's own
+  handover is what stops the renderer, leaves the alternate screen, restores the terminal,
+  runs the order and puts everything back - on the failure path as well as the successful one.
+  Never hand-roll that. It exists because `internal/store/terminal.go`'s two escapees are not
+  only an animation problem: `ssh` opens `/dev/tty` itself for a passphrase or a host-key
+  confirmation and a credential helper is a separate process free to do the same, so drawn
+  over the alternate screen that prompt is invisible and read from the terminal the roster is
+  draining it is unanswerable - a hang whose only exit is another terminal. Refusing such a
+  source instead was considered and rejected by the captain on 2026-07-29: it would block every
+  SSH source and every network source whose credential helper is not on the known-silent
+  allowlist, which is the roster's headline action gone. Two consequences follow and must not
+  be undone. (1) An order reports to the terminal it was handed, never into the model -
+  `Program.Send` is unbuffered and the event loop is blocked inside `Run`, so emitting from
+  there deadlocks the program. (2) `holdInterrupts` runs for the length of the job, because
+  the restored line discipline turns `^C` back into a signal and the working screen exists
+  precisely so work already underway cannot be interrupted; children still receive it, so
+  cancelling a passphrase prompt fails the fetch and the engine rolls back and reports.
+  `cli.Env.tuiDeploy` keeps `Live: false` for the same reason it always had it, now sharper:
+  nothing barracks writes may erase a prompt it did not raise.
 - **Bare `barracks` opens the roster only when stdout is a terminal it can own; `barracks tui`
   refuses in barracks' own wording.** Off a terminal a bare invocation prints byte for byte
   the help it always printed - a full-screen program in a pipe writes alternate-screen and

@@ -24,6 +24,10 @@ const (
 	colSources = 4
 	colSkills  = 5
 	colPosture = 13
+
+	// legendRows is what the posture key costs the pane: a blank line, the
+	// heading, and one line per glyph.
+	legendRows = 6
 )
 
 func (m *model) View() tea.View {
@@ -105,17 +109,37 @@ func (m *model) rosterPane() string {
 	inner := maxInt(8, w-4)
 	nameW := maxInt(4, inner-colMarker-colSources-colSkills-colPosture)
 
+	// Every row that is not a unit is paid for before the window is sized. The
+	// pane pads to the height it declares but never truncates, so a pane whose
+	// rows outnumber that height grows the frame past the terminal, and the
+	// terminal clips what falls off the bottom: first the status line - the
+	// roster's only channel for a refusal - and then the help bar.
+	content := maxInt(1, h-3) // the pane's rows, less its border and its title
+	reserved := 1             // the column header
+	if len(m.st.Units) == 0 {
+		reserved++ // the line that says how to fill an empty roster
+	}
+	reserved += len(m.st.Problems)
+	showLegend := content-reserved-legendRows >= 1
+	if showLegend {
+		reserved += legendRows
+	}
+	budget := content - reserved
+	if len(m.st.Units) > budget {
+		budget-- // the count a windowed roster carries
+	}
+
 	var rows []string
 	rows = append(rows, m.th.label.Render(
 		pad("", colMarker)+pad("UNIT", nameW)+pad("SRC", colSources)+pad("SKL", colSkills)+"POSTURE"))
 	if len(m.st.Units) == 0 {
-		rows = append(rows, m.th.faint.Render("(no units trained - barracks train <name>)"))
+		rows = append(rows, m.th.faint.Render(truncate("(no units trained - barracks train <name>)", inner)))
 	}
 
 	// The pane is a fixed height, so only a window of the roster is drawn and
 	// the cursor is kept inside it. A roster taller than the terminal that
 	// silently stopped at the bottom would be a roster that hides units.
-	first, last := m.window(h - 4)
+	first, last := m.window(budget)
 	for i := first; i < last; i++ {
 		u := m.st.Units[i]
 		style := m.th.body
@@ -137,15 +161,25 @@ func (m *model) rosterPane() string {
 		rows = append(rows, m.th.fail.Render("! "+truncate(p, inner-2)))
 	}
 	// The legend is the key to the posture column, and it is sized off the same
-	// inner width as the rows so it can never be the thing that wraps.
-	legend := func(style lipgloss.Style, glyph, word, gloss string) string {
-		return style.Render(pad(glyph+" "+word, 12)) + m.th.faint.Render(truncate(gloss, inner-12))
+	// inner width as the rows so it can never be the thing that wraps. It is the
+	// first thing a pane too short for everything gives up: the units, the count
+	// and the unreadable records all outrank a key to a column.
+	if showLegend {
+		legend := func(style lipgloss.Style, glyph, word, gloss string) string {
+			return style.Render(pad(glyph+" "+word, 12)) + m.th.faint.Render(truncate(gloss, inner-12))
+		}
+		rows = append(rows, "", m.th.label.Render("POSTURE"),
+			legend(m.th.badge, "●", "spawned", "symlinked, lease-held"),
+			legend(lipgloss.NewStyle().Foreground(m.th.held), "▣", "held", "committed here"),
+			legend(m.th.faint, "○", "afield", "standing in another repo"),
+			legend(m.th.faint, "·", "reserve", "deployed nowhere"))
 	}
-	rows = append(rows, "", m.th.label.Render("POSTURE"),
-		legend(m.th.badge, "●", "spawned", "symlinked, lease-held"),
-		legend(lipgloss.NewStyle().Foreground(m.th.held), "▣", "held", "committed here"),
-		legend(m.th.faint, "○", "afield", "standing in another repo"),
-		legend(m.th.faint, "·", "reserve", "deployed nowhere"))
+	// The last guard, for a terminal too short to hold even what was reserved.
+	// Rows the pane cannot draw are better dropped here than drawn and left for
+	// the terminal to cut off the bottom of the screen instead.
+	if len(rows) > content {
+		rows = rows[:content]
+	}
 
 	return m.th.panel.
 		Width(w).
@@ -311,12 +345,7 @@ func (m *model) confirmModal() string {
 func (m *model) workingModal() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n\n", m.sp.View(), m.th.title.Render("MOVING OUT"))
-	if len(m.working) == 0 {
-		fmt.Fprintln(&b, m.th.faint.Render("forming up..."))
-	}
-	for _, line := range m.working {
-		fmt.Fprintln(&b, m.th.faint.Render(truncate(line, 60)))
-	}
+	fmt.Fprintln(&b, m.th.faint.Render("forming up..."))
 	return m.th.modal.Width(64).Render(b.String())
 }
 

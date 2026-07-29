@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tobi404/barracks/internal/gitcmd"
+	"github.com/tobi404/barracks/internal/paths"
 	"github.com/tobi404/barracks/internal/tui"
 )
 
@@ -50,12 +51,24 @@ func (h *harness) envFor(out, errb *bytes.Buffer) *Env {
 // on disk.
 func (h *harness) frame(w, hh int, script ...string) string {
 	h.t.Helper()
+	frame, _ := h.frameAndTerminal(w, hh, script...)
+	return frame
+}
+
+// frameAndTerminal is frame plus whatever an order wrote to the terminal the
+// roster handed back to it while it ran.
+func (h *harness) frameAndTerminal(w, hh int, script ...string) (string, string) {
+	h.t.Helper()
 	var out, errb bytes.Buffer
 	env := h.envFor(&out, &errb)
 	dark := true
 	cfg := env.tuiConfig(context.Background())
 	cfg.Dark = &dark
-	return plain(tui.Frame(cfg, w, hh, script...))
+	// The frame is read without its styling, but the terminal stream is handed
+	// back exactly as it was written: whether it carries an escape sequence at
+	// all is one of the things worth asserting about it.
+	frame, released := tui.FrameAndTerminal(cfg, w, hh, script...)
+	return plain(frame), released
 }
 
 // TestBareBarracksKeepsPrintingHelpOffATerminal is the non-TTY contract.
@@ -80,6 +93,35 @@ func TestBareBarracksKeepsPrintingHelpOffATerminal(t *testing.T) {
 	}
 	if strings.Contains(out, "\x1b") || strings.Contains(errb, "\x1b") {
 		t.Errorf("bare barracks off a terminal emitted an escape sequence:\nstdout %q\nstderr %q", out, errb)
+	}
+}
+
+// Printing help touches nothing. A bare barracks off a terminal does exactly
+// what it did before the roster existed, and creating the barracks directories
+// is not part of that: on a machine where they cannot be created, asking for
+// help must still answer with help rather than with `barracks: <err>` and a
+// non-zero exit.
+func TestBareBarracksOffATerminalInitialisesNothing(t *testing.T) {
+	h := newHarness(t)
+
+	// A regular file where the data directory would go, so anything that tried
+	// to create one would fail rather than quietly succeed.
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("in the way"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.layout = paths.Layout{Config: filepath.Join(blocked, "brk"), Data: filepath.Join(blocked, "brk")}
+	h.tty = false
+
+	out, errb, err := h.run()
+	if err != nil {
+		t.Fatalf("bare barracks could not print help without a writable home: %v (stderr %s)", err, errb)
+	}
+	if !strings.Contains(out, "Available Commands:") {
+		t.Errorf("bare barracks printed no help:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(blocked, "brk")); err == nil {
+		t.Error("printing help created the barracks data directories")
 	}
 }
 
@@ -282,7 +324,13 @@ func TestRosterDeploysThroughTheRealEngine(t *testing.T) {
 
 // TestRosterShowsBarracksOwnProgressLines is the stream rule seen end to end:
 // the real internal/progress reporter, unmodified, writing barracks' own words
-// into the roster's panel instead of onto the alternate screen behind it.
+// onto the terminal the roster handed back for the fetch - never onto the
+// alternate screen, and never nowhere.
+//
+// A deploy fetches, and a fetch can put a prompt on that terminal that barracks
+// neither raised nor can forward - ssh asking for a key passphrase, a
+// credential helper asking for a password. So the screen is given up for the
+// whole order, and what the order reports goes where the user is looking.
 func TestRosterShowsBarracksOwnProgressLines(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun("train", "frontline")
@@ -293,12 +341,15 @@ func TestRosterShowsBarracksOwnProgressLines(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := h.frame(120, 32, "s", "y", "@work")
+	got, released := h.frameAndTerminal(120, 32, "s", "y", "@work")
 	if !strings.Contains(got, "MOVING OUT") {
 		t.Fatalf("no in-flight screen:\n%s", got)
 	}
-	if !strings.Contains(got, "unpacking") {
-		t.Errorf("the progress reporter's own words never reached the panel:\n%s", got)
+	if !strings.Contains(released, "unpacking") {
+		t.Errorf("the progress reporter's own words never reached the terminal:\n%s", released)
+	}
+	if strings.Contains(released, "\x1b") {
+		t.Errorf("the reporter wrote an escape sequence onto a terminal that may be carrying a prompt: %q", released)
 	}
 }
 

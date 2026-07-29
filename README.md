@@ -557,6 +557,15 @@ all-or-nothing rollback. A spawn made from the roster is indistinguishable on di
 made at the prompt, and anything barracks declines to touch is reported in the roster's own
 panel rather than swallowed by it.
 
+A spawn may have to fetch, and a fetch can ask you something barracks cannot answer for you -
+an SSH key passphrase, a host-key confirmation, a credential helper wanting a password. So
+the roster hands the terminal back for the whole order: the screen steps aside, the fetch
+reports plainly where you can read it, any prompt it raises is visible and answerable, and
+the roster comes back with the outcome when it is done. A `Ctrl-C` at such a prompt cancels
+the prompt - barracks itself keeps the terminal handed over until the order has either
+finished or rolled itself back, because a half-applied spawn is the one state this tier must
+never be left in.
+
 | Key | Does |
 |---|---|
 | `↑`/`k`, `↓`/`j` | move up and down the line |

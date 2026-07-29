@@ -70,7 +70,10 @@ type state struct {
 type reader interface {
 	Loadouts() ([]*loadout.Loadout, []error)
 	Leases() ([]*lease.Lease, []error)
-	Garrisons(root string) ([]garrison.Garrison, error)
+	// Garrisons is the repository's whole lockfile rather than its entries,
+	// because which entry belongs to a loadout is the lockfile's own rule -
+	// Manifest.FindFor - and the roster must not carry a second copy of it.
+	Garrisons(root string) (*garrison.Manifest, error)
 	Root() string
 }
 
@@ -88,13 +91,13 @@ func gather(r reader) state {
 		st.Problems = append(st.Problems, p.Error())
 	}
 
-	var committed []garrison.Garrison
+	var committed *garrison.Manifest
 	if st.Root != "" {
-		g, err := r.Garrisons(st.Root)
+		m, err := r.Garrisons(st.Root)
 		if err != nil {
 			st.Problems = append(st.Problems, err.Error())
 		}
-		committed = g
+		committed = m
 	}
 
 	here := lease.FindInScope(leases, lease.ScopeRepo, st.Root)
@@ -115,11 +118,13 @@ func gather(r reader) state {
 				u.Away++
 			}
 		}
-		for i := range committed {
-			if committed[i].Loadout == l.Name {
-				u.Committed = &committed[i]
-				break
-			}
+		if committed != nil {
+			// Identity when both sides carry one, name otherwise. Asking the
+			// lockfile rather than comparing names here is what keeps the roster
+			// and `barracks deployed` incapable of disagreeing about a loadout
+			// renamed in one clone and still recorded under the old name in
+			// another - and what stops a missing identity reading as a mismatch.
+			u.Committed = committed.FindFor(l.ID, l.Name)
 		}
 		st.Units = append(st.Units, u)
 	}
