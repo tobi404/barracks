@@ -40,7 +40,8 @@ worthless: the install would look perfect and the commit would carry nothing. ba
 for that and warns if a `.gitignore` rule would swallow the files. A garrison never takes a
 lease out, so no lifetime governs it and no reaper pass can reach it - `barracks.lock` in the
 repository is the whole record, and it travels with the repository rather than with the
-machine.
+machine. That is why the two tiers refuse each other: a path registered both ways would
+either hide the committed files from the team or leave every checkout dirty forever.
 
 **Lifetimes are governed by leases.** A spawn writes a record describing exactly what it
 created and when it should end:

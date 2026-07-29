@@ -44,7 +44,7 @@ jobs:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           TAP: tobi404/homebrew-tap
         run: |
-          fix="Create a fine-grained personal access token (resource owner tobi404, repository access only $TAP, repository permission Contents: Read and write), store it as the repository secret HOMEBREW_TAP_GITHUB_TOKEN, and re-run this workflow. The Releasing section of README.md walks through it."
+          fix="Create a fine-grained personal access token (resource owner tobi404, repository access only $TAP, repository permission Contents: Read and write), store it as the repository secret HOMEBREW_TAP_GITHUB_TOKEN, and re-run this workflow. The Releasing section of docs/development.md walks through it."
           if [ -z "$HOMEBREW_TAP_GITHUB_TOKEN" ]; then
             echo "::error::the repository secret HOMEBREW_TAP_GITHUB_TOKEN is not set, so the Homebrew cask cannot be published to $TAP. No release was created. $fix"
             exit 1
