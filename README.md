@@ -29,6 +29,7 @@ deployment.
 | I want to… | Go to |
 |---|---|
 | Install it | [Install](#install) |
+| See everything on one screen | [The roster](#the-roster) |
 | Learn the commands | [Commands](#commands) |
 | Keep skills up to date | [`barracks upgrade`](#barracks-upgrade-loadout) |
 | Drop a source I no longer want | [`barracks strip`](#barracks-strip-loadout-source) |
@@ -531,6 +532,62 @@ rules with no guessing. See [Choosing targets](#choosing-targets).
 deployed or garrisoned here - to empty a loadout without deleting it, strip its sources
 instead. `barracks targets` lists the agents barracks can deploy to and marks the ones this
 repository is already set up for.
+
+---
+
+## The roster
+
+Run `barracks` with no arguments and you get the roster: every loadout on this machine, what
+each one carries, and where each one is standing, on one screen.
+
+```bash
+barracks        # the roster
+barracks tui    # the same screen, named explicitly
+```
+
+The left pane lists your units with their source count, skill count and posture - spawned
+here, committed here, standing in another repository, or in reserve. The right pane is the
+dossier for whichever unit the cursor is on: its description, its sources with the commit
+each is pinned at and the skills each contributed, and every place it is currently deployed.
+
+From it you can spawn (`s`) and recall (`r`) the unit under the cursor. Both put the order in
+front of you before anything happens, and both run the same engine the commands do - the same
+target detection, the same symlinks, the same `.git/info/exclude` registration, the same
+all-or-nothing rollback. A spawn made from the roster is indistinguishable on disk from one
+made at the prompt, and anything barracks declines to touch is reported in the roster's own
+panel rather than swallowed by it.
+
+| Key | Does |
+|---|---|
+| `↑`/`k`, `↓`/`j` | move up and down the line |
+| `s` | spawn the selected unit here |
+| `r` | recall it from here |
+| `R` | re-read every record |
+| `?` | the orders overlay |
+| `q` | leave |
+
+The roster does not train, equip, strip, rename, garrison, upgrade or run. Those stay
+commands, and no key is bound to them - a key that announces it does not work is still a key
+you have to learn.
+
+**Bare `barracks` opens the roster only when stdout is a terminal.** Anywhere else - a pipe,
+a redirect, a CI job - `barracks` prints exactly the help it has always printed, and not one
+escape sequence. A full-screen program in a pipe would write alternate-screen and cursor
+sequences into whatever is reading and then wait forever for a key that is never coming, so
+`barracks | head` and `barracks` in a script keep working the way they always did.
+
+`barracks tui` is the explicit spelling of the same screen. Because it is an explicit request
+for something interactive, off a terminal it refuses and says so rather than filling your
+file with escape codes:
+
+```
+$ barracks tui > log
+barracks: the roster needs a terminal and stdout here is not one; for a script use
+`barracks list`, `barracks deployed` or `barracks inspect`
+```
+
+Nothing is printed after the roster gives the terminal back - no [flavor line](#voice), no
+[progress](#progress) - because a session at the roster may have changed nothing at all.
 
 ---
 

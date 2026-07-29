@@ -6,9 +6,11 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/tobi404/barracks/internal/progress"
 	"github.com/tobi404/barracks/internal/spawn"
 	"github.com/tobi404/barracks/internal/store"
+	"github.com/tobi404/barracks/internal/tui"
 	"github.com/tobi404/barracks/internal/voice"
 )
 
@@ -57,6 +60,14 @@ type Env struct {
 	// announced. Zero means progress.RevealAfter. Only tests set it.
 	ProgressAfter time.Duration
 
+	// openRoster opens the full-screen roster and blocks until the user leaves
+	// it. It is a field so a test can drive everything around the roster - the
+	// terminal decision a bare `barracks` makes, the records the roster is
+	// handed, the flavor line that must not follow it - without a terminal to
+	// draw on. init leaves the real one in place; only tests replace it, and
+	// what they replace is the program loop and nothing else.
+	openRoster func(context.Context, tui.Config) error
+
 	loadouts  *loadout.Store
 	leases    *lease.Store
 	store     *store.Store
@@ -66,6 +77,9 @@ type Env struct {
 	place     string
 	preview   bool
 	quiet     bool
+	// captured is where command output goes while the full-screen roster owns
+	// the terminal. Nil outside it.
+	captured *bytes.Buffer
 }
 
 func (e *Env) now() time.Time {
@@ -111,6 +125,9 @@ func (e *Env) init() error {
 		Now:  e.now,
 		Rand: e.Rand,
 	}
+	if e.openRoster == nil {
+		e.openRoster = tui.Run
+	}
 	return nil
 }
 
@@ -139,6 +156,44 @@ func (e *Env) isTerminal() bool {
 
 func (e *Env) errIsTerminal() bool {
 	return e.ErrTty != nil && e.ErrTty()
+}
+
+// canOpenTheRoster reports whether stdout is a terminal barracks can take over
+// for a full screen and then give back.
+//
+// It is deliberately a stronger question than isTerminal, and a separate one.
+// The flavor line and the progress indicator ask "is anything watching this
+// stream", and for them a character device is the whole test: a line nobody
+// reads costs nothing. A full-screen program asks "can I own this", and there
+// the same test is wrong in one specific, load-bearing way - os.DevNull is a
+// character device too. `barracks > /dev/null` from a shell with a controlling
+// terminal would otherwise open the roster onto nothing and then wait forever
+// for a key that is never coming, which is the exact failure the whole non-TTY
+// rule exists to prevent.
+//
+// Nothing else may ask this question: a stream barracks only writes to is
+// isTerminal's business, and widening that one to cover this would take the
+// flavor line off a redirect it has always been fine on.
+func (e *Env) canOpenTheRoster() bool {
+	return e.isTerminal() && !isNullDevice(e.Out)
+}
+
+// isNullDevice reports whether w is the platform's bit bucket. Only a real file
+// can be: a test's buffer is not a terminal in the first place.
+func isNullDevice(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	null, err := os.Stat(os.DevNull)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fi, null)
 }
 
 // newProgress builds the reporter slow operations announce themselves to, and
