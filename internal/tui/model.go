@@ -189,6 +189,14 @@ func newModel(cfg Config) *model {
 		keys: defaultKeys(),
 		exec: tea.Exec,
 	}
+	// The dossier scrolls vertically and only vertically. The viewport's own
+	// keymap also binds l/h (and the arrows) to a horizontal scroll, which the
+	// roster advertises nowhere and which cuts the first columns off every line
+	// of the pane - a unit called "backend" reading as "end" looks like a
+	// rendering fault, and nothing on screen says which key undoes it. A step
+	// of zero is how the widget itself turns that axis off, so the pane keeps
+	// the vertical scrolling a long dossier needs.
+	m.vp.SetHorizontalStep(0)
 	m.st = gather(cfg.Records)
 	return m
 }

@@ -8,12 +8,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/tobi404/barracks/internal/garrison"
@@ -647,18 +649,102 @@ func TestHelpOverlayOpensAndCloses(t *testing.T) {
 // a key advertised in the help still has to be explained, and a key that changes
 // nothing and says nothing is worse. So an unbound key must leave the screen
 // exactly as it was - not act, and not claim anything either.
+//
+// The keys this drives are derived rather than written down, because a list
+// somebody types out only ever covers the keys somebody already thought of.
+// Letters bound nowhere are the easy half; the half that actually bit is the
+// viewport behind the dossier, which carries a keymap of its own that the
+// roster advertises nothing about. Taking that half from viewport.DefaultKeyMap
+// by reflection means a key bubbles binds in a future version is covered the
+// day it lands, not the day somebody notices the pane looking broken.
 func TestUnboundKeysDoNothingAndClaimNothing(t *testing.T) {
-	r := fakeRecords{root: "/repo", loadouts: []*loadout.Loadout{unitLoadout("alpha", "a"), unitLoadout("bravo", "b")}}
-	idle := plain(Frame(withActions(cfgFor(r)), 100, 24))
-	for _, k := range []string{"t", "e", "x", "z", "w", "v"} {
-		got := plain(Frame(withActions(cfgFor(r)), 100, 24, k))
-		if got != idle {
-			t.Errorf("%q changed the screen even though nothing is bound to it:\n%s", k, got)
-		}
-		if strings.Contains(got, "not wired") {
-			t.Errorf("%q advertises itself as unwired:\n%s", k, got)
+	alpha := unitLoadout("alpha", "a")
+	// A dossier with a line wider than its pane, so a horizontal scroll would
+	// show. The precondition below is what holds that true.
+	alpha.Description = "the loadout every clone of this repository is expected to be carrying"
+	r := fakeRecords{root: "/repo", loadouts: []*loadout.Loadout{alpha, unitLoadout("bravo", "b")}}
+	cfg := withActions(cfgFor(r))
+	const w, h = 80, 24
+
+	// This fixture has to be able to show both failures, or the loop below is
+	// just pressing keys. A dossier that fits its pane cannot be scrolled at
+	// all, and one that overflows it would be scrolled *legitimately* by the
+	// paging keys - which is behaviour the roster wants and this test must not
+	// be reading as a regression.
+	probe := newModel(cfg)
+	probe.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	probe.vp.SetXOffset(1)
+	if probe.vp.XOffset() == 0 {
+		t.Fatal("no dossier line is wider than its pane, so nothing here could scroll sideways")
+	}
+	if n, height := probe.vp.TotalLineCount(), probe.vp.Height(); n > height {
+		t.Fatalf("the dossier is %d lines in a %d-line pane, so the paging keys would scroll it for good reason", n, height)
+	}
+
+	bound := map[string]bool{}
+	k := defaultKeys()
+	for _, b := range append(k.ShortHelp(), flatten(k.FullHelp())...) {
+		for _, name := range b.Keys() {
+			bound[name] = true
 		}
 	}
+	keys := []string{"t", "e", "x", "z", "w", "v"}
+	for _, name := range widgetKeys(viewport.DefaultKeyMap()) {
+		if !bound[name] {
+			keys = append(keys, name)
+		}
+	}
+	if len(keys) <= 6 {
+		t.Fatal("the viewport's keymap yielded no keys of its own, so its half of this was not driven")
+	}
+
+	idle := plain(Frame(cfg, w, h))
+	for _, name := range keys {
+		got := plain(Frame(cfg, w, h, name))
+		if got != idle {
+			t.Errorf("%q changed the screen even though nothing is bound to it:\n%s", name, got)
+		}
+		if strings.Contains(got, "not wired") {
+			t.Errorf("%q advertises itself as unwired:\n%s", name, got)
+		}
+	}
+}
+
+// The test above names its keys rather than typing them, so the harness has to
+// refuse a name it cannot press instead of sending that name's first letter -
+// which for "right" is `r`, the recall key, and would have turned a test about
+// a key doing nothing into a test of a key doing something else entirely.
+func TestTheHarnessRefusesAKeyItCannotPress(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("a key name the harness does not know was pressed as something else")
+		}
+	}()
+	keyPress("f10")
+}
+
+// widgetKeys reads every key.Binding field off a widget's keymap. It is
+// reflective on purpose: a keymap the roster does not own can grow a field, and
+// a hand-written list of fields would go on passing without it.
+func widgetKeys(keymap any) []string {
+	var names []string
+	v := reflect.ValueOf(keymap)
+	for i := 0; i < v.NumField(); i++ {
+		b, ok := v.Field(i).Interface().(key.Binding)
+		if !ok {
+			continue
+		}
+		names = append(names, b.Keys()...)
+	}
+	return names
+}
+
+func flatten(rows [][]key.Binding) []key.Binding {
+	var out []key.Binding
+	for _, row := range rows {
+		out = append(out, row...)
+	}
+	return out
 }
 
 // Every key the roster advertises has to reach a branch that does something.
