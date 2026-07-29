@@ -26,21 +26,11 @@ import (
 type records struct {
 	env  *Env
 	root string
-	// targets is what the deploy picker opens on, held here so a muster can
-	// throw it away.
-	targets *deployTargets
 }
 
-// Loadouts is the first read of a muster, and a muster is the roster asking the
-// world again. Anything worked out from the last one goes with it: `R` exists
-// precisely for the case where something changed that barracks did not do.
-func (r records) Loadouts() ([]*loadout.Loadout, []error) {
-	r.targets.forget()
-	return r.env.loadouts.List()
-}
-
-func (r records) Leases() ([]*lease.Lease, []error) { return r.env.leases.List() }
-func (r records) Root() string                      { return r.root }
+func (r records) Loadouts() ([]*loadout.Loadout, []error) { return r.env.loadouts.List() }
+func (r records) Leases() ([]*lease.Lease, []error)       { return r.env.leases.List() }
+func (r records) Root() string                            { return r.root }
 
 func (r records) Garrisons(root string) (*garrison.Manifest, error) {
 	return garrison.Load(root)
@@ -73,40 +63,27 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 	if loc, ok := e.repoHere(ctx); ok {
 		root = loc.Root
 	}
-	targets := e.deployTargets(ctx)
 	return tui.Config{
-		Records:   records{env: e, root: root, targets: targets},
+		Records:   records{env: e, root: root},
 		Version:   Version,
 		Targets:   targetOptions(root),
 		Launchers: launchers(),
-		Selection: targets.of,
+		Selection: func(l *loadout.Loadout) ([]string, string, error) {
+			return e.deployTargets(ctx, l)
+		},
 		Deploy: func(ctx context.Context, l *loadout.Loadout, chosen []string, s tui.Session) tui.Outcome {
-			defer targets.forget()
 			return e.tuiDeploy(ctx, l, chosen, s)
 		},
 		Recall: func(ctx context.Context, l *loadout.Loadout) tui.Outcome {
-			defer targets.forget()
 			return e.tuiRecall(ctx, l)
 		},
 		Garrison: func(ctx context.Context, l *loadout.Loadout, s tui.Session) tui.Outcome {
-			defer targets.forget()
 			return e.tuiGarrison(ctx, l, s)
 		},
 		Upgrade: func(ctx context.Context, l *loadout.Loadout, s tui.Session) tui.Preview {
-			// Planning writes nothing outside the store, so only the half that
-			// carries the plan out is a change worth forgetting anything for.
-			p := e.tuiUpgrade(ctx, l, s)
-			if p.Apply != nil {
-				carryOut := p.Apply
-				p.Apply = func(ctx context.Context, s tui.Session) tui.Outcome {
-					defer targets.forget()
-					return carryOut(ctx, s)
-				}
-			}
-			return p
+			return e.tuiUpgrade(ctx, l, s)
 		},
 		Launch: func(ctx context.Context, l *loadout.Loadout, program tui.Launcher, s tui.Session) tui.Outcome {
-			defer targets.forget()
 			return e.tuiLaunch(ctx, l, program, s)
 		},
 	}
@@ -120,58 +97,18 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 // ticked, which reads as "choose something" and turns a refusal into an
 // explicit per-spawn override the moment the user does.
 //
-// The answer is remembered because it is asked from inside the roster's event
-// loop, where the screen does not repaint until it returns, and answering it
-// runs two git subprocesses and then walks the repository for evidence of each
-// agent. What it is remembered until is the whole of the design: see forget.
-type deployTargets struct {
-	ask     func(*loadout.Loadout) ([]string, string, error)
-	settled map[string]targetAnswer
-}
-
-type targetAnswer struct {
-	ids    []string
-	reason string
-	err    error
-}
-
-func (e *Env) deployTargets(ctx context.Context) *deployTargets {
-	return &deployTargets{
-		settled: map[string]targetAnswer{},
-		ask: func(l *loadout.Loadout) ([]string, string, error) {
-			sel, err := e.selectTargets(ctx, l, nil, false)
-			if err != nil {
-				return nil, "", err
-			}
-			return sel.IDs(), sel.Reason(), nil
-		},
+// It is resolved afresh every time the deploy card opens, and holds nothing
+// between one card and the next. That costs the picker two git subprocesses and
+// a walk of the repository each time it is raised, on the roster's own event
+// loop, and the cost is deliberate: the answer's whole promise is that leaving
+// the picker alone deploys exactly where the command would, and a deploy into a
+// new agent is precisely what makes that agent detected.
+func (e *Env) deployTargets(ctx context.Context, l *loadout.Loadout) ([]string, string, error) {
+	sel, err := e.selectTargets(ctx, l, nil, false)
+	if err != nil {
+		return nil, "", err
 	}
-}
-
-func (d *deployTargets) of(l *loadout.Loadout) ([]string, string, error) {
-	a, known := d.settled[l.Name]
-	if !known {
-		ids, reason, err := d.ask(l)
-		a = targetAnswer{ids: ids, reason: reason, err: err}
-		d.settled[l.Name] = a
-	}
-	return a.ids, a.reason, a.err
-}
-
-// forget drops every remembered answer, and is called from both events that can
-// make one untrue: an order barracks carried out, and a muster.
-//
-// It is the order that matters most. A deploy into an agent this repository did
-// not show before makes that agent detected, so the next card has to open on it
-// - the picker promises that leaving it alone deploys exactly where the command
-// would, and an answer remembered across the write that changed it would break
-// that promise silently, in the direction of installing somewhere the user was
-// never shown.
-func (d *deployTargets) forget() {
-	if d == nil {
-		return
-	}
-	clear(d.settled)
+	return sel.IDs(), sel.Reason(), nil
 }
 
 // targetOptions is the menu the deploy picker offers: every agent barracks can

@@ -363,6 +363,18 @@ deliberate decision, not a refactor.
   everything *around* the roster stays covered without one. The one other thing that needs a
   loop is the terminal handover below, and `model.exec` is the seam for that: `tui.Frame`
   substitutes it and `FrameAndTerminal` returns what the order wrote while it was away.
+  **That harness is also blind to concurrency, so nothing reachable from a `tea.Cmd` may
+  touch state the model reads or writes.** `tui.Frame` runs every command inline on the test
+  goroutine, while Bubble Tea's `handleCommands` gives each one a goroutine of its own - so a
+  green `go test -race ./...` over `internal/tui` says nothing whatever about whether a
+  command shares state with `Update`. It has already cost one: a per-loadout memo of where a
+  deploy would go, added for the responsiveness of the picker, was cleared from the refresh
+  and recall commands while `Update` read the same map, and holding `R` down would have
+  killed barracks with `fatal error: concurrent map writes` - not a panic, so
+  `recoverFromPanic` could not catch it and the terminal would have been left in the
+  alternate screen. `cli.Env.deployTargets` therefore resolves live on every card and keeps
+  nothing; the picker is slower for it, and that is the trade. Do not rebuild that cache -
+  measure whether the resolve itself can be made cheap instead.
 - **The frame is the size of the terminal, and what does not fit is cut where it is built.**
   The alternate screen clips a larger frame rather than scrolling it, and a card is the
   easiest way to grow one, because the compositor's bounds are the union of its layers. So
@@ -416,15 +428,6 @@ deliberate decision, not a refactor.
   at, so a plan in which *nothing resolved* still reconciles a spawn an earlier upgrade left
   to a live session - reading "every source failed" as "nothing to do" is how that skip
   becomes permanent.
-- **What the deploy picker opens on is remembered, and forgotten by anything that could
-  make it untrue.** `cli.deployTargets` caches `selectTargets` per loadout because the
-  roster asks it inside the event loop, where two git subprocesses and a walk of the
-  repository are a screen that stops repainting. `forget` is called from both events that
-  invalidate an answer - every order `tuiConfig` wires up, and `records.Loadouts`, which is
-  the first read of a muster - because the card's promise is that leaving the picker alone
-  deploys exactly where the command would, and a deploy into a new agent is precisely what
-  makes that agent detected. A cache here whose invalidation is not tied to the write is a
-  card that installs somewhere the user was never shown.
 - **The deploy picker overrides only when the user actually picked.** `tui.picker.chosen`
   returns nil until something is toggled, and nil reaches `target.Select` as no override at
   all - so an untouched picker leaves the loadout's declaration and the repository's evidence
