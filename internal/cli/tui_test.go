@@ -986,3 +986,119 @@ func TestTheTargetMenuIsTheRegistry(t *testing.T) {
 		}
 	}
 }
+
+// An upgrade that failed is never headlined as one that worked.
+//
+// `barracks upgrade` exits non-zero when a source could not be resolved, and
+// the roster has to reach the same verdict from the same place. A green
+// FRONTLINE UPGRADED over a failed upgrade is a report barracks cannot stand
+// behind, and the cost of it is delayed: the user finds out later, from the
+// skills that never moved.
+func TestARosterUpgradeThatFailedIsNotReportedAsASuccess(t *testing.T) {
+	h := newHarness(t)
+	other := h.secondSource(testutil.Skill{Path: "skills/hooks"})
+	h.mustRun("train", "frontline")
+	h.mustRun("equip", "frontline", h.sourceArg("skills"), "--only", "react")
+	h.mustRun("equip", "frontline", other.Dir+"#main:skills")
+	h.mustRun("spawn", "frontline")
+
+	// One source moves forward and the other is taken away entirely, so the
+	// plan has real work in it and still cannot be carried out in full - the
+	// case a "did anything change" reading of the result would call a success.
+	other.AddSkills(t, testutil.Skill{Path: "skills/hooks", Body: "---\nname: hooks\n---\n\nversion two\n"})
+	other.Commit(t, "move hooks forward")
+	if err := os.RemoveAll(h.src.Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := h.run("upgrade", "frontline"); err == nil {
+		t.Fatal("the command no longer fails on an unresolvable source, so this compared nothing")
+	}
+
+	got := h.frame(120, 32, "u", "@pump", "y", "@pump")
+	if strings.Contains(got, "FRONTLINE UPGRADED") {
+		t.Errorf("a failed upgrade was headlined as a success:\n%s", got)
+	}
+	if !strings.Contains(got, "REFUSED") {
+		t.Errorf("a failed upgrade was not reported as a failure:\n%s", got)
+	}
+	if !strings.Contains(got, "some sources could not be upgraded") {
+		t.Errorf("the card does not say what the command exits on:\n%s", got)
+	}
+}
+
+// A plan whose every source failed has nothing to carry out, so the roster must
+// not offer to carry it out. The one key on that card would do no work and then
+// report the same failure a second time.
+func TestAnUpgradeThatResolvedNothingIsNotOfferedToBeCarriedOut(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontline")
+	h.mustRun("equip", "frontline", h.sourceArg("skills"), "--only", "react")
+	h.mustRun("spawn", "frontline")
+	if err := os.RemoveAll(h.src.Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errb bytes.Buffer
+	env := h.envFor(&out, &errb)
+	l, err := env.loadouts.Get("frontline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var released bytes.Buffer
+	preview := env.tuiUpgrade(context.Background(), l, tui.Session{Out: &released, Err: &released})
+	if preview.Apply != nil {
+		t.Error("a plan that resolved nothing was still offered to be applied")
+	}
+	if preview.Err == nil {
+		t.Error("a plan that resolved nothing was not a refusal")
+	}
+
+	got := h.frame(120, 32, "u", "@pump")
+	if strings.Contains(got, "carry it out") {
+		t.Errorf("the roster offered to carry out a plan with nothing in it:\n%s", got)
+	}
+	if !strings.Contains(got, "REFUSED") || !strings.Contains(got, "could not be upgraded") {
+		t.Errorf("a plan that resolved nothing was not reported as a refusal:\n%s", got)
+	}
+}
+
+// A loadout declaring a target the registry does not know is a broken
+// definition. `barracks spawn` refuses it and says so, and the roster has to do
+// the same rather than open a picker with nothing ticked - which reads as a
+// choice to be made, and turns the broken declaration into an explicit
+// per-spawn override the moment somebody makes it.
+func TestTheRosterRefusesALoadoutWhoseDeclaredTargetIsUnknown(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontline")
+	h.mustRun("equip", "frontline", h.sourceArg("skills"), "--only", "react")
+
+	var out, errb bytes.Buffer
+	env := h.envFor(&out, &errb)
+	l, err := env.loadouts.Get("frontline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Targets = []string{"retired-agent"}
+	if err := env.loadouts.Save(l); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := h.run("spawn", "frontline"); err == nil {
+		t.Fatal("the command accepted a target the registry does not know, so this compared nothing")
+	}
+
+	got := h.frame(120, 32, "s")
+	if !strings.Contains(got, "REFUSED") || !strings.Contains(got, "does not know") {
+		t.Fatalf("the roster hid the broken declaration:\n%s", got)
+	}
+	if strings.Contains(got, "DEPLOY ORDER") {
+		t.Errorf("a broken declaration still raised a deploy order:\n%s", got)
+	}
+
+	// Pressing on cannot turn the refusal into a deploy that lands anywhere.
+	h.frame(120, 32, "s", "space", "y", "@pump")
+	if _, err := os.Stat(h.skillsDir()); !os.IsNotExist(err) {
+		t.Errorf("a refused loadout was deployed anyway: %v", err)
+	}
+}

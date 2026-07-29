@@ -398,6 +398,19 @@ deliberate decision, not a refactor.
   `TestTheRostersUpgradePlanIsTheCommandsDryRun` compares the card's body line for line
   against `barracks upgrade --dry-run`. An order needing no repository (`upgrade`) is gated
   apart from the three that do, in `model.refuse`, which is where every gate lives.
+- **A verdict is reached in one place, or the two surfaces will eventually disagree about
+  it.** Whether an upgrade succeeded is `cli.upgradeVerdict`, which the command exits on and
+  the roster's `Outcome.Err` carries: a green `FRONTLINE UPGRADED` over an upgrade the
+  command would have failed is a report barracks cannot stand behind, and the user finds out
+  late, from the skills that never moved. Whether a deploy has a destination at all is
+  `Config.Selection`, which returns an error for exactly the loadouts `barracks spawn`
+  refuses; `tui.model.pickerFor` refuses on it rather than opening an empty picker, because
+  "nothing is ticked" is a state the user answers by ticking a box - which would turn a
+  declaration barracks could not read into an explicit `OriginFlag` override that quietly
+  succeeds. Reconstructing either judgement at the card is the bug, not the wording. The
+  same rule is why `tui.Preview` may carry a nil `Apply`: a plan whose every source failed
+  (`cli.nothingResolved`) is shown as the refusal it is rather than offered with
+  `y carry it out`.
 - **The deploy picker overrides only when the user actually picked.** `tui.picker.chosen`
   returns nil until something is toggled, and nil reaches `target.Select` as no override at
   all - so an untouched picker leaves the loadout's declaration and the repository's evidence

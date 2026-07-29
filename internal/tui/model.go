@@ -366,7 +366,17 @@ func (m *model) propose(o order) tea.Cmd {
 		m.status = reason
 		return nil
 	}
-	m.pick = m.pickerFor(o, u)
+	pick, err := m.pickerFor(o, u)
+	if err != nil {
+		// Where a deploy would go is part of the loadout's own definition, so a
+		// definition barracks cannot read is a refusal and not a choice to be
+		// made. It goes to the outcome panel rather than the status line for the
+		// reason every barracks refusal names a thing: the sentence names the
+		// target it does not know, and a status line would cut it.
+		m.refused(err)
+		return nil
+	}
+	m.pick = pick
 	m.note = ""
 	if o == orderUpgrade {
 		return m.start(o)
@@ -407,7 +417,11 @@ func (m *model) refuse(o order, u unit) string {
 }
 
 // pickerFor is the choice an order's card offers, if it offers one.
-func (m *model) pickerFor(o order, u unit) picker {
+//
+// It refuses rather than returning a picker whenever the order cannot honestly
+// be offered - which today is a deploy whose loadout barracks cannot work out a
+// destination for at all.
+func (m *model) pickerFor(o order, u unit) (picker, error) {
 	switch o {
 	case orderDeploy:
 		var options []choice
@@ -420,9 +434,13 @@ func (m *model) pickerFor(o order, u unit) picker {
 		}
 		var ids []string
 		if m.cfg.Selection != nil {
-			ids, _ = m.cfg.Selection(u.Loadout)
+			got, _, err := m.cfg.Selection(u.Loadout)
+			if err != nil {
+				return picker{}, err
+			}
+			ids = got
 		}
-		return newPicker(options, ids, true)
+		return newPicker(options, ids, true), nil
 	case orderLaunch:
 		var options []choice
 		for _, l := range m.cfg.Launchers {
@@ -432,9 +450,21 @@ func (m *model) pickerFor(o order, u unit) picker {
 		if len(options) > 0 {
 			first = []string{options[0].Key}
 		}
-		return newPicker(options, first, false)
+		return newPicker(options, first, false), nil
 	}
-	return picker{}
+	return picker{}, nil
+}
+
+// refused puts a refusal the roster raised itself in front of the user, in the
+// same panel an order's own refusal lands in. Nothing was written, so unlike a
+// finished order there is nothing to re-read.
+func (m *model) refused(err error) {
+	m.pending, m.working = orderNone, orderNone
+	m.pick = picker{}
+	m.note, m.status = "", ""
+	m.apply = nil
+	m.result = Outcome{Err: err}
+	m.scr = screenOutcome
 }
 
 // start carries out an order.
@@ -445,7 +475,13 @@ func (m *model) start(o order) tea.Cmd {
 		return nil
 	}
 	chosen := m.pick.chosen()
-	program := m.launcher()
+	// Only a launch has a program, and only the launch picker's keys are
+	// programs. Asking for one on the way through every other order is what
+	// would let a deploy's ticked target be read as a choice of agent.
+	var program Launcher
+	if o == orderLaunch {
+		program = m.launcher()
+	}
 	m.pending = orderNone
 	m.pick = picker{}
 	m.note = ""
@@ -508,10 +544,18 @@ func (m *model) handover(run func(Session) Outcome) tea.Cmd {
 }
 
 // launcher is the program a launch order would start.
+//
+// The choice is looked up by the key the picker reports, never by the row it
+// sits on. The launch picker happens to be built one row per launcher today, so
+// the two agree by coincidence rather than by construction - and a coincidence
+// that decides which program gets started is one filtering change away from
+// starting the wrong agent, silently, with somebody's skills already in place.
 func (m *model) launcher() Launcher {
-	for i, on := range m.pick.on {
-		if on && i < len(m.cfg.Launchers) {
-			return m.cfg.Launchers[i]
+	for _, key := range m.pick.keys() {
+		for _, l := range m.cfg.Launchers {
+			if l.Command == key {
+				return l
+			}
 		}
 	}
 	return Launcher{}

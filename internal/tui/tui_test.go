@@ -99,8 +99,8 @@ func withMenus(cfg Config) Config {
 		{ID: "opencode", Display: "OpenCode"},
 		{ID: "windsurf", Display: "Windsurf"},
 	}
-	cfg.Selection = func(*loadout.Loadout) ([]string, string) {
-		return []string{"claude"}, "detected in this repository"
+	cfg.Selection = func(*loadout.Loadout) ([]string, string, error) {
+		return []string{"claude"}, "detected in this repository", nil
 	}
 	cfg.Launchers = []Launcher{
 		{Command: "claude", Display: "Claude Code"},
@@ -1560,6 +1560,69 @@ func TestTheRecallCardSaysItLeavesTheCommittedTierAlone(t *testing.T) {
 	}
 	if !strings.Contains(got, "barracks recall frontline") {
 		t.Errorf("the recall card does not name what removes the garrison:\n%s", got)
+	}
+}
+
+// A loadout barracks cannot work out a destination for is a broken definition,
+// and `barracks spawn` refuses it by name. The roster has to refuse the same
+// loadout in the same words rather than open a picker with nothing ticked:
+// "nothing is selected" is what a user answers by ticking a box, and the moment
+// they do, the declaration barracks could not read has been replaced by an
+// explicit override and the deploy quietly succeeds.
+func TestADeployRefusesADefinitionBarracksCannotRead(t *testing.T) {
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
+	d := &deployTracker{}
+	cfg := withMenus(cfgFor(r))
+	cfg.Deploy = d.deploy
+	cfg.Selection = func(*loadout.Loadout) ([]string, string, error) {
+		return nil, "", errors.New("loadout declares a target barracks does not know: retired")
+	}
+
+	got := plain(Frame(cfg, 100, 30, "s"))
+	if !strings.Contains(got, "REFUSED") || !strings.Contains(got, "does not know") {
+		t.Fatalf("the roster hid the definition error instead of refusing on it:\n%s", got)
+	}
+	if strings.Contains(got, "DEPLOY ORDER") {
+		t.Errorf("a definition barracks cannot read still raised a deploy order:\n%s", got)
+	}
+	if strings.Contains(got, "TARGETS") {
+		t.Errorf("the refusal still opened a picker to tick a box on:\n%s", got)
+	}
+
+	// And pressing on cannot turn it into a deploy: the card is a report, so
+	// the next key closes it and lands back on the roster.
+	after := plain(Frame(cfg, 100, 30, "s", "space", "y", "@pump"))
+	if d.calls != 0 {
+		t.Fatalf("the deploy ran %d times after a refusal, want 0", d.calls)
+	}
+	if strings.Contains(after, "any key to return to the roster") {
+		t.Errorf("the refusal card would not close:\n%s", after)
+	}
+}
+
+// The program a launch starts is the one whose key the user chose, never the
+// one sitting at the same position in the menu.
+//
+// The launch picker is built one row per launcher, so the two agree by
+// coincidence today - which is exactly why a positional lookup survives every
+// test that drives the real card, and why this one hands the model a picker in
+// a different order, as any filtering of that menu would.
+func TestTheLaunchStartsTheAgentThatWasChosenNotTheRowItSatOn(t *testing.T) {
+	m := newModel(withActions(cfgFor(fakeRecords{root: "/repo/lab"})))
+	m.pick = newPicker([]choice{
+		{Key: "cursor-agent", Label: "Cursor"},
+		{Key: "claude", Label: "Claude Code"},
+	}, []string{"claude"}, false)
+
+	if got := m.launcher(); got.Command != "claude" {
+		t.Errorf("the launch would start %q, want claude", got.Command)
+	}
+
+	// A key no launcher answers to starts nothing rather than the first thing
+	// on the list.
+	m.pick = newPicker([]choice{{Key: "windsurf", Label: "Windsurf"}}, []string{"windsurf"}, false)
+	if got := m.launcher(); got.Command != "" {
+		t.Errorf("a choice no launcher matches started %q", got.Command)
 	}
 }
 

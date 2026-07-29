@@ -68,13 +68,7 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 		Version:   Version,
 		Targets:   targetOptions(root),
 		Launchers: launchers(),
-		Selection: func(l *loadout.Loadout) ([]string, string) {
-			sel, err := e.selectTargets(ctx, l, nil, false)
-			if err != nil {
-				return nil, ""
-			}
-			return sel.IDs(), sel.Reason()
-		},
+		Selection: e.tuiSelection(ctx),
 		Deploy: func(ctx context.Context, l *loadout.Loadout, targets []string, s tui.Session) tui.Outcome {
 			return e.tuiDeploy(ctx, l, targets, s)
 		},
@@ -90,6 +84,40 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 		Launch: func(ctx context.Context, l *loadout.Loadout, program tui.Launcher, s tui.Session) tui.Outcome {
 			return e.tuiLaunch(ctx, l, program, s)
 		},
+	}
+}
+
+// tuiSelection answers where a deploy of a loadout would go if nobody chose
+// otherwise - the same question `barracks spawn` answers, from the same call,
+// including when the answer is a refusal. A loadout that declares a target the
+// registry does not know is a broken definition and the command says so; the
+// roster has to say the same thing rather than open a picker with nothing
+// ticked, which reads as "choose something" and turns a refusal into an
+// explicit per-spawn override the moment the user does.
+//
+// The answer is settled once per loadout for the life of the roster. It is
+// asked from inside the event loop, where the screen does not repaint until it
+// returns, and answering it runs two git subprocesses and then walks the
+// repository looking for evidence of each agent. That is the same staleness
+// Targets already carries, which is resolved once when the roster opens.
+func (e *Env) tuiSelection(ctx context.Context) func(*loadout.Loadout) ([]string, string, error) {
+	type answer struct {
+		ids    []string
+		reason string
+		err    error
+	}
+	settled := map[string]answer{}
+	return func(l *loadout.Loadout) ([]string, string, error) {
+		a, known := settled[l.Name]
+		if !known {
+			sel, err := e.selectTargets(ctx, l, nil, false)
+			a = answer{err: err}
+			if err == nil {
+				a.ids, a.reason = sel.IDs(), sel.Reason()
+			}
+			settled[l.Name] = a
+		}
+		return a.ids, a.reason, a.err
 	}
 }
 
@@ -319,6 +347,14 @@ func (e *Env) tuiUpgrade(ctx context.Context, l *loadout.Loadout, s tui.Session)
 		Lines:   e.capturedReport(),
 		Notices: e.capturedNotices(),
 	}}
+	if nothingResolved(plans) {
+		// Nothing resolved, so there is nothing to offer: an Apply here would be
+		// a key that carries out a plan with no work in it and then reports the
+		// same failure a second time. The card shows this as the refusal it is,
+		// in the words the command would have exited on.
+		p.Err = upgradeVerdict(plans, true)
+		return p
+	}
 	p.Apply = func(ctx context.Context, s tui.Session) tui.Outcome {
 		restore := e.captureStreams()
 		defer restore()
@@ -331,20 +367,16 @@ func (e *Env) tuiUpgrade(ctx context.Context, l *loadout.Loadout, s tui.Session)
 		renderUpgrade(e, plans, false)
 		ok := renderGarrisonUpgrades(e, stages, false)
 
-		out := tui.Outcome{
+		// The verdict comes from the same function the command exits on. An
+		// upgrade that failed must never be headlined as one that worked: what
+		// the user believes moved forward and what did are then different, and
+		// they find that out later, from the skills.
+		return tui.Outcome{
 			Title:   fmt.Sprintf("%s upgraded", l.Name),
 			Lines:   e.capturedReport(),
 			Notices: e.capturedNotices(),
+			Err:     upgradeVerdict(plans, ok),
 		}
-		for _, plan := range plans {
-			if plan.Failed() {
-				out.Notices = append(out.Notices, "some sources could not be upgraded")
-			}
-		}
-		if !ok {
-			out.Notices = append(out.Notices, "the committed files could not be brought onto the new pins")
-		}
-		return out
 	}
 	return p
 }

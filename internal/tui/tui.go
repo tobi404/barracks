@@ -91,7 +91,13 @@ type Config struct {
 	// otherwise, and why - the same answer the commands print. The picker opens
 	// on it, so leaving the picker alone deploys exactly where the command
 	// would have.
-	Selection func(l *loadout.Loadout) (ids []string, reason string)
+	//
+	// It answers with an error for the same loadouts the command refuses, and
+	// that error is a refusal here too. "Nowhere" and "barracks cannot read this
+	// definition" are different answers, and a picker that opened empty on the
+	// second would let a ticked box turn a broken definition into an explicit
+	// override that quietly succeeds.
+	Selection func(l *loadout.Loadout) (ids []string, reason string, err error)
 	// Launchers are the agent programs a run can start on this machine.
 	Launchers []Launcher
 
