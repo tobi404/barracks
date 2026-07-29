@@ -148,6 +148,28 @@ func (p *LoadoutPlan) Failed() bool {
 	return len(p.Errs) > 0
 }
 
+// Actionable reports whether carrying this plan out would do anything at all:
+// a definition to save, or a spawn to reconcile.
+//
+// It is the predicate Apply works from, and it is a method so that nothing
+// outside this package has to work it out again. Source status is not that
+// predicate and never was: a move is planned for every source at the commit it
+// is already pinned at, so a spawn an earlier upgrade deliberately left alone -
+// one a live session was holding - is still reconciled by a later run in which
+// nothing resolved at all. Deciding "there is nothing to carry out" from the
+// sources instead is what would make that skip permanent.
+func (p *LoadoutPlan) Actionable() bool {
+	if p.definitionChanged {
+		return true
+	}
+	for i := range p.Spawns {
+		if p.Spawns[i].Changed() {
+			return true
+		}
+	}
+	return false
+}
+
 // Engine carries the collaborators an upgrade needs.
 type Engine struct {
 	Store    *store.Store

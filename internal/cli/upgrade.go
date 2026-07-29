@@ -117,22 +117,25 @@ func upgradeVerdict(plans []*upgrade.LoadoutPlan, committedOK bool) error {
 	return nil
 }
 
-// nothingResolved reports whether a plan came back with every one of its
-// sources failed, which is the one shape of plan there is nothing to carry out
-// of: no source has a new commit to relink onto and no definition has a new pin
-// to save, so applying it could only repeat the failure the plan already
-// describes.
-func nothingResolved(plans []*upgrade.LoadoutPlan) bool {
-	sources, failed := 0, 0
+// upgradeActionable reports whether carrying this upgrade out would do
+// anything, in either tier.
+//
+// Each half answers for itself - upgrade.LoadoutPlan for the definition and the
+// spawns, garrisonStage for the committed files - and this only asks them.
+// Working the answer out here from what the plan happens to say would be a
+// second opinion on somebody else's decision, and the two would drift.
+func upgradeActionable(plans []*upgrade.LoadoutPlan, stages []*garrisonStage) bool {
 	for _, p := range plans {
-		for _, s := range p.Sources {
-			sources++
-			if s.Status == upgrade.StatusFailed {
-				failed++
-			}
+		if p.Actionable() {
+			return true
 		}
 	}
-	return sources > 0 && failed == sources
+	for _, s := range stages {
+		if s.Actionable() {
+			return true
+		}
+	}
+	return false
 }
 
 // selectLoadouts resolves the command's arguments to loadouts, refusing the

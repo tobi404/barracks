@@ -1011,10 +1011,6 @@ func TestARosterUpgradeThatFailedIsNotReportedAsASuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, _, err := h.run("upgrade", "frontline"); err == nil {
-		t.Fatal("the command no longer fails on an unresolvable source, so this compared nothing")
-	}
-
 	got := h.frame(120, 32, "u", "@pump", "y", "@pump")
 	if strings.Contains(got, "FRONTLINE UPGRADED") {
 		t.Errorf("a failed upgrade was headlined as a success:\n%s", got)
@@ -1024,6 +1020,12 @@ func TestARosterUpgradeThatFailedIsNotReportedAsASuccess(t *testing.T) {
 	}
 	if !strings.Contains(got, "some sources could not be upgraded") {
 		t.Errorf("the card does not say what the command exits on:\n%s", got)
+	}
+
+	// The command is what the card has to agree with, so this is only a
+	// comparison for as long as the command still exits non-zero on it.
+	if _, _, err := h.run("upgrade", "frontline"); err == nil {
+		t.Fatal("the command no longer fails on an unresolvable source, so this compared nothing")
 	}
 }
 
@@ -1100,5 +1102,85 @@ func TestTheRosterRefusesALoadoutWhoseDeclaredTargetIsUnknown(t *testing.T) {
 	h.frame(120, 32, "s", "space", "y", "@pump")
 	if _, err := os.Stat(h.skillsDir()); !os.IsNotExist(err) {
 		t.Errorf("a refused loadout was deployed anyway: %v", err)
+	}
+}
+
+// An upgrade in which nothing resolved still has work to do when a spawn is
+// behind the commit the loadout is already pinned at.
+//
+// That is not a corner case: it is what an upgrade that deliberately left a
+// live session alone leaves behind, and AGENTS.md carries the invariant that
+// such a skip can never become permanent. `barracks upgrade` reconciles the
+// spawn and then exits non-zero, so the roster must offer the same work rather
+// than reading "every source failed" as "there is nothing to carry out".
+func TestARosterUpgradeThatResolvedNothingStillReconcilesAStrandedSpawn(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontline")
+	h.mustRun("equip", "frontline", h.sourceArg("skills"), "--only", "react")
+	h.mustRun("spawn", "frontline")
+
+	// A live session holds the spawn, so the upgrade moves the definition on
+	// and leaves the links exactly where they are.
+	store := leaseStore(t, h)
+	leases, _ := store.List()
+	held := leases[0]
+	held.Kind = "process"
+	held.Owner = ownerFor(4242, "a-live-agent-session")
+	if err := store.Save(held); err != nil {
+		t.Fatal(err)
+	}
+	h.prober.alive[4242] = "a-live-agent-session"
+
+	h.src.AddSkills(t, testutil.Skill{Path: "skills/react", Body: "---\nname: react\n---\n\nversion two\n"})
+	h.src.Commit(t, "move react forward")
+	if out := h.mustRun("upgrade", "frontline"); !strings.Contains(out, "left as it is") {
+		t.Fatalf("the upgrade did not leave the held spawn alone, so nothing is stranded:\n%s", out)
+	}
+	link := filepath.Join(h.skillsDir(), "react")
+	if body := resolved(t, link); strings.Contains(body, "version two") {
+		t.Fatalf("the held spawn was relinked, so nothing is stranded to recover: %q", body)
+	}
+
+	// The session ends and the source goes away entirely, so nothing can be
+	// resolved - and the spawn is still behind the pin the loadout records.
+	delete(h.prober.alive, 4242)
+	if err := os.RemoveAll(h.src.Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	plan := h.frame(120, 32, "u", "@pump")
+	if !strings.Contains(plan, "y carry it out") {
+		t.Fatalf("the roster declined to offer work the command would still do:\n%s", plan)
+	}
+	h.frame(120, 32, "u", "@pump", "y", "@pump")
+	if body := resolved(t, link); !strings.Contains(body, "version two") {
+		t.Errorf("the stranded spawn was never brought forward: %q", body)
+	}
+}
+
+// The deploy picker opens on where a plain `barracks spawn` would send the
+// loadout, and it has to still be true after the roster has deployed something.
+//
+// A deploy into an agent this repository did not show before makes that agent
+// detected, so the answer the card opened on a moment ago is no longer the
+// answer the command would give. Leaving the picker alone passes nothing
+// through as an override, so a card showing a stale set would install
+// somewhere the user was never shown.
+func TestThePickerOpensOnWhereTheSpawnWouldGoAfterAnOrderHasLanded(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("train", "frontline")
+	h.mustRun("equip", "frontline", h.sourceArg("skills"), "--only", "react")
+
+	// Untick Claude, take Cursor instead - claude, agents, cursor is the
+	// registry's own order - then dismiss the outcome and ask again.
+	again := h.frame(120, 32, "s", "space", "j", "j", "space", "y", "@pump", "esc", "s")
+	if !testutil.IsSymlink(t, filepath.Join(h.work.Dir, ".cursor", "skills", "react")) {
+		t.Fatal("the deploy never landed, so the second card had nothing to notice")
+	}
+	if !strings.Contains(again, "[x] Cursor") {
+		t.Errorf("the picker did not open on the agent this repository now shows:\n%s", again)
+	}
+	if strings.Contains(again, "[x] Claude Code") {
+		t.Errorf("the picker opened on an answer the deploy had already made untrue:\n%s", again)
 	}
 }

@@ -2,6 +2,7 @@ package upgrade
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -1331,5 +1332,42 @@ func TestUpgradeIgnoresSpawnsOfOtherLoadouts(t *testing.T) {
 	}
 	if got := dest(t, css); got != before {
 		t.Errorf("upgrading frontend moved backend's spawn: %s -> %s", before, got)
+	}
+}
+
+// Actionable is the question "would carrying this out do anything", and it has
+// to be answered from what Apply acts on rather than from what resolved.
+//
+// The case that matters is the last one: an earlier upgrade left a spawn alone
+// because a live session was holding it, so the spawn is behind the commit the
+// loadout is already pinned at. A later run in which nothing resolves still has
+// that spawn to reconcile, and a plan that called itself empty would strand it
+// there for good.
+func TestAPlanIsActionableWhenApplyingItWouldDoSomething(t *testing.T) {
+	var nothing LoadoutPlan
+	if nothing.Actionable() {
+		t.Error("an empty plan claimed there was something to carry out")
+	}
+
+	definition := LoadoutPlan{definitionChanged: true}
+	if !definition.Actionable() {
+		t.Error("a plan with a definition to save was called empty")
+	}
+
+	held := LoadoutPlan{Spawns: []SpawnPlan{{
+		Lease: &lease.Lease{},
+		Skip:  "held by a live session (pid 4242)",
+		Ops:   []Op{{Kind: OpRelink}},
+	}}}
+	if held.Actionable() {
+		t.Error("a plan whose only spawn is being left alone claimed work")
+	}
+
+	stranded := LoadoutPlan{
+		Sources: []SourcePlan{{Status: StatusFailed, Err: errors.New("could not resolve main")}},
+		Spawns:  []SpawnPlan{{Lease: &lease.Lease{}, Ops: []Op{{Kind: OpRelink}}}},
+	}
+	if !stranded.Actionable() {
+		t.Error("a spawn behind its pin was called empty because nothing resolved")
 	}
 }

@@ -408,9 +408,23 @@ deliberate decision, not a refactor.
   "nothing is ticked" is a state the user answers by ticking a box - which would turn a
   declaration barracks could not read into an explicit `OriginFlag` override that quietly
   succeeds. Reconstructing either judgement at the card is the bug, not the wording. The
-  same rule is why `tui.Preview` may carry a nil `Apply`: a plan whose every source failed
-  (`cli.nothingResolved`) is shown as the refusal it is rather than offered with
-  `y carry it out`.
+  same rule is why `tui.Preview` may carry a nil `Apply`: whether there is anything to carry
+  out is `upgrade.LoadoutPlan.Actionable` - the predicate `Apply` itself works from, a
+  definition to save or a spawn to reconcile - plus `cli.garrisonStage.Actionable` for the
+  committed half, and `cli.upgradeActionable` only asks them. Never answer it from
+  `SourcePlan.Status`: a move is planned for every source at the commit it is already pinned
+  at, so a plan in which *nothing resolved* still reconciles a spawn an earlier upgrade left
+  to a live session - reading "every source failed" as "nothing to do" is how that skip
+  becomes permanent.
+- **What the deploy picker opens on is remembered, and forgotten by anything that could
+  make it untrue.** `cli.deployTargets` caches `selectTargets` per loadout because the
+  roster asks it inside the event loop, where two git subprocesses and a walk of the
+  repository are a screen that stops repainting. `forget` is called from both events that
+  invalidate an answer - every order `tuiConfig` wires up, and `records.Loadouts`, which is
+  the first read of a muster - because the card's promise is that leaving the picker alone
+  deploys exactly where the command would, and a deploy into a new agent is precisely what
+  makes that agent detected. A cache here whose invalidation is not tied to the write is a
+  card that installs somewhere the user was never shown.
 - **The deploy picker overrides only when the user actually picked.** `tui.picker.chosen`
   returns nil until something is toggled, and nil reaches `target.Select` as no override at
   all - so an untouched picker leaves the loadout's declaration and the repository's evidence

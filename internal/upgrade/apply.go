@@ -19,6 +19,9 @@ import (
 // never become a licence to delete.
 func (e *Engine) Apply(plans []*LoadoutPlan) {
 	for _, p := range plans {
+		if !p.Actionable() {
+			continue
+		}
 		if p.definitionChanged {
 			if err := e.Loadouts.Save(p.Next); err != nil {
 				// Relinking spawns to commits the definition does not record
