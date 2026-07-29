@@ -5,9 +5,10 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 barracks is a Go CLI that manages named bundles of agent skills ("loadouts") sourced from
 git repos and materialises them into any repo, in one of two tiers: personal (symlinks,
 lease-governed, kept out of git - `internal/spawn`) or committed (real files plus
-`barracks.lock`, shared by everyone who clones - `internal/garrison`). `README.md` covers
-what it does and the command surface; this file covers what a contributor needs that the
-code does not show.
+`barracks.lock`, shared by everyone who clones - `internal/garrison`). It has two surfaces:
+the commands, and a full-screen roster (`internal/tui`, Bubble Tea v2) that a bare `barracks`
+opens on a terminal. `README.md` covers what it does and both surfaces; this file covers what
+a contributor needs that the code does not show.
 
 ## Build and test
 
@@ -27,8 +28,17 @@ the darwin liveness probe untested. `.golangci-lint-version` is the only place t
 version is written: `make golangci` reads it, and the action reads the same file through
 its `version-file` input - bump it there, never inline. `noctx` is disabled in
 `.golangci.yml` on purpose - the reasoning is written in the config, next to the setting.
-Coverage floor is 80% (`COVER_MIN` in the `Makefile`). Release automation lives in its own
-workflow (`.github/workflows/release.yml`); never fold it into `ci.yml`.
+Release automation lives in its own workflow (`.github/workflows/release.yml`); never fold it
+into `ci.yml`.
+
+**A new package must carry its own tests or it fails the gate for everybody.** The floor is
+80% (`COVER_MIN` in the `Makefile`) read off the single aggregate `total:` line, but `cover`
+passes **no `-coverpkg`**, so instrumentation is per-package: a package is credited only for
+what its *own* package's tests execute. A package driven entirely through `internal/cli`
+scores 0% and drags the aggregate down by its full weight. Measured twice now, most recently
+when `internal/tui` arrived without tests and took the repo from 84.5% to 75.4%. The
+arithmetic for sizing the work: with `S` statements of which `C` are covered, adding `T`
+statements at coverage `c` holds the line when `(C + cT) / (S + T) ≥ 0.80`.
 
 **Tests must never touch the network.** Build local git fixtures with
 `internal/testutil` (`NewSkillRepo` git-inits a temp dir with `SKILL.md` directories) and
@@ -70,7 +80,16 @@ is written, read by both `make release-check`/`make release-snapshot` and the wo
   `go-version-file: go.mod`, and that Go is what compiles the shipped binaries (`go version
   -m` on a release binary reports it). Never raise `go.mod` to satisfy GoReleaser, golangci-lint,
   or any other tool: that raises the floor for everyone importing the module for a reason
-  that has nothing to do with them. Install the tool as a binary instead.
+  that has nothing to do with them. Install the tool as a binary instead. **A linked library
+  is a different case, and the floor is `1.25.0` because one was.** `charm.land/bubbletea/v2`,
+  `lipgloss/v2` and `bubbles/v2` all declare `go 1.25.0`, and `internal/tui` genuinely links
+  them - that is not a tool being appeased, it is code the binaries contain. Decided by the
+  captain on 2026-07-29, on the grounds that Go supports its two most recent releases and
+  1.24 was already the older one, and that barracks ships as binaries and a Homebrew cask
+  rather than as a library. The invariant above stands unchanged for tools; anyone reading
+  `go 1.25.0` against it should know it was decided rather than drifted into. Prove a floor
+  change the way CI will see it - `GOTOOLCHAIN=go1.25.0 go build ./... && go test ./...` -
+  because a local `GOTOOLCHAIN=auto` silently fetches something newer and proves nothing.
 - **The binaries reproduce; the archives do not.** `-trimpath`, `CGO_ENABLED=0` and
   `mod_timestamp: {{ .CommitTimestamp }}` make two builds of one tag produce bit-identical
   binaries (verified by diffing their hashes across three runs). The `.tar.gz` around them
@@ -331,6 +350,84 @@ deliberate decision, not a refactor.
   drives a real child process because the signal path cannot be asserted in-process. Prove a
   change on a real pty (`script -q`, `expect`) as well - the suite cannot see a line that
   wraps or a prompt that gets overwritten.
+- **The roster resolves no path, runs no git command and owns no store.** `internal/tui` is
+  Cobra-free and store-free: every record it reads and every action it takes arrives through
+  `tui.Config`, filled in by `internal/cli` from the objects the commands already hold. A
+  second way of finding a lease record is a second thing that can be wrong, and the two
+  surfaces have to be incapable of disagreeing. It is also what makes the package testable at
+  all: `Update` and `View` are pure functions of the model, so every screen is driven
+  synchronously with no terminal, no goroutine and no deadline (`tui.Frame` in `capture.go` is
+  that harness, and is deliberately kept - golden frames are how the layout is asserted).
+  Needing a deadline in one of these tests means the design drifted. `Run` is the only part
+  that opens a program loop, and `cli.Env.openRoster` is the seam a test replaces so
+  everything *around* the roster stays covered without one. The one other thing that needs a
+  loop is the terminal handover below, and `model.exec` is the seam for that: `tui.Frame`
+  substitutes it and `FrameAndTerminal` returns what the order wrote while it was away.
+- **The frame is the size of the terminal, and what does not fit is cut where it is built.**
+  The alternate screen clips a larger frame rather than scrolling it, and a card is the
+  easiest way to grow one, because the compositor's bounds are the union of its layers. So
+  every producer budgets before it draws - `rosterPane` reserves its non-unit rows,
+  `outcomeModal` reserves head and foot, the help bar is given a width so it elides itself -
+  and `model.fit` is the single backstop that makes it structural rather than intended. When
+  a card cannot hold everything, what gives way is fixed and is not a layout question: the
+  body of a report is cut first because a list can be counted instead of read, then notices,
+  and never the closing hint, which is the only thing that says how to leave. Whatever is cut
+  says how much it stood for (`model.elide`) - a card silently showing eight of thirty skills
+  reads exactly like a spawn that installed eight. A card is a layer over the roster so the
+  unit stays visible behind its own order, but only in whole rows of it: `views.curtain` is a
+  blank band the width of the terminal and the height of the card, composited beneath it, and
+  without it the dossier line under each card row keeps whatever tail the card does not cover -
+  an orphaned word floating beside a REFUSED card, which reads as a rendering fault rather than
+  as context. It has to be the band rather than the strings, because the line that overflows is
+  whichever one happens to be long.
+- **Nothing barracks writes to a stream may reach the alternate screen - and nothing may be
+  dropped to keep it out.** While the roster owns the terminal, `cli.Env.captureStreams`
+  redirects `Env.Out` and `Env.Err` into a buffer, and `capturedLines` folds what they said
+  into the outcome panel; the store's progress reporter is swapped for one with `Live: false`
+  writing through `lineWriter` to wherever the order can be read. Both halves are the rule: a
+  report painted over the roster is corruption, and a path barracks refused to touch that
+  never reaches the user is worse. Every early return on an action path carries its notices
+  out too.
+- **An order that fetches runs with the terminal handed back to it, and nothing may turn that
+  handover into an interrupt.** `tui.terminalJob` is a `tea.ExecCommand`, so Bubble Tea's own
+  handover is what stops the renderer, leaves the alternate screen, restores the terminal,
+  runs the order and puts everything back - on the failure path as well as the successful one.
+  Never hand-roll that. It exists because `internal/store/terminal.go`'s two escapees are not
+  only an animation problem: `ssh` opens `/dev/tty` itself for a passphrase or a host-key
+  confirmation and a credential helper is a separate process free to do the same, so drawn
+  over the alternate screen that prompt is invisible and read from the terminal the roster is
+  draining it is unanswerable - a hang whose only exit is another terminal. Refusing such a
+  source instead was considered and rejected by the captain on 2026-07-29: it would block every
+  SSH source and every network source whose credential helper is not on the known-silent
+  allowlist, which is the roster's headline action gone. Two consequences follow and must not
+  be undone. (1) An order reports to the terminal it was handed, never into the model -
+  `Program.Send` is unbuffered and the event loop is blocked inside `Run`, so emitting from
+  there deadlocks the program. (2) `holdInterrupts` runs for the length of the job, because
+  the restored line discipline turns `^C` back into a signal and the working screen exists
+  precisely so work already underway cannot be interrupted; children still receive it, so
+  cancelling a passphrase prompt fails the fetch and the engine rolls back and reports.
+  `cli.Env.tuiDeploy` keeps `Live: false` for the same reason it always had it, now sharper:
+  nothing barracks writes may erase a prompt it did not raise.
+- **Bare `barracks` opens the roster only when stdout is a terminal it can own; `barracks tui`
+  refuses in barracks' own wording.** Off a terminal a bare invocation prints the help it
+  always printed plus the one line for the `tui` command, and nothing else - a full-screen
+  program in a pipe writes alternate-screen and cursor sequences into whatever is reading and
+  then waits forever for a key that never comes, which would hang `barracks` in any script or
+  CI job. That claim is held by a golden file (`internal/cli/testdata/bare-help.golden`,
+  regenerated with `BARRACKS_TEST_UPDATE_GOLDEN=1`) rather than by substring assertions, which
+  is what a line arriving or leaving is invisible to: making the root command runnable added a
+  `barracks [flags]` usage line nothing wanted, and only a diff against a binary built from the
+  previous commit found it. It is suppressed by deriving root's `UsageTemplate` from cobra's
+  own and gating the usage line on `.HasParent`, so subcommands - which all have one - are
+  untouched. `cli.Env.canOpenTheRoster` is that
+  question and is deliberately **stricter** than `isTerminal`, which the voice and the progress
+  indicator use: `os.DevNull` is a character device, so `barracks > /dev/null` from a shell
+  with a controlling terminal passes `isTerminal` and would hang (verified on a pty, then
+  fixed). Never widen `isTerminal` to fix this - that would take the flavor line off redirects
+  it has always been fine on. `barracks tui` refuses rather than letting Bubble Tea fail with
+  its own `/dev/tty` wording, and `runTUI` calls `Env.previews()` so no flavor line follows a
+  session that may have changed nothing. Prove any change here on a real pty as well as in the
+  suite: `internal/cli/tui_test.go` can see the decision, not the screen.
 
 ## Sharp edges
 

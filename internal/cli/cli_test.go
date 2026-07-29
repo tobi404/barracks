@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/tobi404/barracks/internal/paths"
 	"github.com/tobi404/barracks/internal/proc"
 	"github.com/tobi404/barracks/internal/testutil"
+	"github.com/tobi404/barracks/internal/tui"
 )
 
 // harness runs the real command tree in-process against temp directories, a
@@ -48,6 +50,11 @@ type harness struct {
 	// cwd overrides the directory a run happens in, for the tests that need a
 	// second repository. Empty means the harness's own work repo.
 	cwd string
+	// roster stands in for the full-screen program loop. Nil leaves the real
+	// one in place, which is why the rest of the suite can never open it: every
+	// test but the roster's own also leaves tty off, and the two together mean
+	// no invocation in this package reaches for a terminal.
+	roster func(context.Context, tui.Config) error
 }
 
 func (h *harness) workingDir() string {
@@ -118,6 +125,7 @@ func (h *harness) run(args ...string) (string, string, error) {
 		Rand:   h.rnd,
 
 		ProgressAfter: h.progressAfter,
+		openRoster:    h.roster,
 	}
 	cmd := New(env)
 	cmd.SetArgs(args)

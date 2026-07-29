@@ -53,10 +53,38 @@ versions with no barracks installed.
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       Version,
+		// A bare `barracks` opens the roster when there is a terminal to draw
+		// it on, and prints exactly the help it always printed when there is
+		// not.
+		//
+		// The test is stdout, for the same reason the flavor line tests it: is
+		// anything reading this, or is somebody watching it. A full-screen
+		// program in a pipe would emit alternate screen and cursor sequences
+		// into whatever is on the other end and then wait forever for a key
+		// that is never coming, so `barracks | cat` and `barracks` in CI must
+		// keep the behaviour they have today. See Env.canOpenTheRoster for why
+		// this asks a stricter question than the flavor line does.
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !env.canOpenTheRoster() {
+				return cmd.Help()
+			}
+			env.reap()
+			return env.runTUI(cmd.Context())
+		},
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			// Recorded before init, because the progress reporter it builds is
 			// gated on it too.
 			env.quiet = quiet
+			// Printing help touches nothing. Only the root command has no
+			// parent, and a bare `barracks` that cannot open the roster does
+			// exactly what it did before the roster existed: it prints the help
+			// and exits 0. Initialising here would create the barracks data
+			// directories as a side effect of asking for help, and would turn a
+			// machine where they cannot be created into `barracks: <err>` and
+			// exit 1 where help is what was asked for.
+			if cmd.Parent() == nil && !env.canOpenTheRoster() {
+				return nil
+			}
 			return env.init()
 		},
 		// Cobra skips every PostRun once RunE has returned an error, which is
@@ -69,6 +97,17 @@ versions with no barracks installed.
 	}
 	root.SetOut(env.Out)
 	root.SetErr(env.Err)
+	// Cobra prints a `barracks [flags]` usage line for any command that is
+	// runnable, and the root only became runnable so a bare invocation could
+	// open the roster. Nothing invokes `barracks` for its flags alone, so that
+	// line is a side effect rather than information, and the help off a
+	// terminal is the help it always printed plus the one line for `tui`.
+	//
+	// Derived from cobra's own template rather than restated, so a cobra that
+	// changes the rest of the usage block still changes it here. Subcommands
+	// inherit this template and are unaffected: only the root has no parent.
+	root.SetUsageTemplate(strings.Replace(
+		root.UsageTemplate(), "{{if .Runnable}}", "{{if and .Runnable .HasParent}}", 1))
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false,
 		"suppress the progress indicator and the flavor line (see also "+EnvQuiet+")")
@@ -89,6 +128,7 @@ versions with no barracks installed.
 		newDisbandCmd(env),
 		newAssignCmd(env),
 		newTargetsCmd(env),
+		newTUICmd(env),
 	)
 	return root
 }
