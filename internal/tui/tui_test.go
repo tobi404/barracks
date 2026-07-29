@@ -305,18 +305,135 @@ func TestTheFrameNeverOutgrowsTheTerminal(t *testing.T) {
 		// "s" on a unit that carries nothing is a refusal, and the status line
 		// is the only place the roster can put one.
 		got := plain(Frame(cfgFor(r), w, h, "s"))
-		if n := len(strings.Split(got, "\n")); n > h {
-			t.Errorf("%dx%d: the frame is %d rows tall, so the terminal clips %d of them:\n%s", w, h, n, n-h, got)
-		}
+		fits(t, got, w, h, fmt.Sprintf("%dx%d roster", w, h))
 		for _, want := range []string{
 			"carries nothing", // the status line
-			"dismissed",       // the last entry in the help bar
+			"up the line",     // the help bar
 			"parse loadout",   // the unreadable record, which must never be dropped
 			"of 30",           // the count that says the roster is windowed
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%dx%d: %q fell off the frame:\n%s", w, h, want, got)
 			}
+		}
+	}
+
+	// A help bar too long for the terminal is elided by the help itself, with
+	// the ellipsis that says so. Letting it run on instead would widen the whole
+	// frame, and the terminal would cut the same keys off without a word.
+	wide := plain(Frame(cfgFor(r), 120, 30, "s"))
+	if !strings.Contains(wide, "q dismissed") {
+		t.Errorf("a terminal wide enough for the whole help bar did not get it:\n%s", wide)
+	}
+	if narrow := plain(Frame(cfgFor(r), 70, 16, "s")); !strings.Contains(narrow, "…") {
+		t.Errorf("a help bar too wide for the terminal was cut without saying so:\n%s", narrow)
+	}
+}
+
+// fits is the invariant every screen has to hold: the frame is the size of the
+// terminal it is drawn on. The alternate screen does not scroll a larger one,
+// it clips it, and what falls off is the bottom and the right.
+func fits(t *testing.T, frame string, w, h int, what string) {
+	t.Helper()
+	lines := strings.Split(frame, "\n")
+	if len(lines) > h {
+		t.Errorf("%s: the frame is %d rows tall, so the terminal clips %d of them:\n%s", what, len(lines), len(lines)-h, frame)
+	}
+	for i, line := range lines {
+		if n := len([]rune(line)); n > w {
+			t.Errorf("%s: row %d is %d columns wide in a %d column terminal: %q", what, i, n, w, line)
+		}
+	}
+}
+
+// A card is a layer over the roster, and the compositor's bounds are the union
+// of its layers, so a card taller than the screen takes the whole frame with it
+// - the same clipping the roster pane was fixed for, on the path the pane's own
+// budget does not cover. A spawn from a source carrying twenty skills reports a
+// line per skill, so this is the ordinary shape of a large deploy rather than a
+// contrived one.
+func TestAnOutcomeCardNeverOutgrowsTheTerminal(t *testing.T) {
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
+
+	var lines []string
+	lines = append(lines, "targets: claude (detected)")
+	lines = append(lines, "Claude Code  20 skills")
+	for i := 0; i < 20; i++ {
+		lines = append(lines, fmt.Sprintf("  + skill-%02d", i))
+	}
+	notices := []string{
+		"left in place (barracks did not create it): /repo/lab/.claude/skills/react-forms - not a symlink barracks made",
+		"left in place (barracks did not create it): /repo/lab/.claude/skills/css-armory - not a symlink barracks made",
+	}
+
+	cfg := cfgFor(r)
+	cfg.Deploy = (&deployTracker{outcome: Outcome{
+		Title: "frontline deployed", Lines: lines, Notices: notices,
+	}}).deploy
+
+	for _, tc := range []struct {
+		w, h int
+		want []string
+	}{
+		// The skill list is cut to fit; every notice, the headline and the way
+		// out survive, and "more" is the card saying how much it stood down.
+		{80, 24, []string{"FRONTLINE DEPLOYED", "react-forms", "css-armory", "any key to return to the roster", "more"}},
+		// Room for all of it, so none of it is cut.
+		{120, 40, []string{"FRONTLINE DEPLOYED", "react-forms", "css-armory", "any key to return to the roster"}},
+		// A card with room for neither cannot show both, but it still says so:
+		// the body shrinks to a count before a notice loses a single row.
+		{90, 14, []string{"FRONTLINE DEPLOYED", "any key to return to the roster", "more"}},
+	} {
+		got := plain(Frame(cfg, tc.w, tc.h, "s", "y", "@pump"))
+		fits(t, got, tc.w, tc.h, fmt.Sprintf("%dx%d outcome", tc.w, tc.h))
+		for _, want := range tc.want {
+			if !strings.Contains(got, want) {
+				t.Errorf("%dx%d: %q fell off the outcome card:\n%s", tc.w, tc.h, want, got)
+			}
+		}
+	}
+}
+
+// A barracks error names a path, and wrap hard-breaks it, so a refusal is the
+// other way an outcome card can outgrow the screen.
+func TestARefusalCardNeverOutgrowsTheTerminal(t *testing.T) {
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
+	cfg := cfgFor(r)
+	cfg.Deploy = (&deployTracker{outcome: Outcome{
+		Err: errors.New("spawn into Claude Code: target path already occupied: " +
+			strings.Repeat("/deeply/nested/directory", 20) + "/react-forms is committed to this repository"),
+		Notices: []string{"left in place (barracks did not create it): /repo/lab/.claude/skills/css-armory"},
+	}}).deploy
+
+	for _, size := range [][2]int{{80, 24}, {100, 30}} {
+		w, h := size[0], size[1]
+		got := plain(Frame(cfg, w, h, "s", "y", "@pump"))
+		fits(t, got, w, h, fmt.Sprintf("%dx%d refusal", w, h))
+		for _, want := range []string{"REFUSED", "css-armory", "any key to return to the roster"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("%dx%d: %q fell off the refusal card:\n%s", w, h, want, got)
+			}
+		}
+	}
+}
+
+// The other two cards are short and fixed, but nothing may be exempt from the
+// rule - a card that grew for any reason would clip the frame the same way.
+func TestEveryOverlayFitsTheTerminal(t *testing.T) {
+	r := fakeRecords{
+		root:     "/repo/lab",
+		loadouts: []*loadout.Loadout{unitLoadout("frontline", "a", "b")},
+		leases:   []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 2)},
+	}
+	cfg := cfgFor(r)
+	cfg.Deploy = (&deployTracker{}).deploy
+	cfg.Recall = func(context.Context, *loadout.Loadout) Outcome { return Outcome{Title: "frontline recalled"} }
+
+	for _, size := range [][2]int{{80, 24}, {60, 16}, {140, 40}} {
+		w, h := size[0], size[1]
+		for _, script := range [][]string{{"?"}, {"s"}, {"r"}, {"s", "y"}} {
+			got := plain(Frame(cfg, w, h, script...))
+			fits(t, got, w, h, fmt.Sprintf("%dx%d overlay %v", w, h, script))
 		}
 	}
 }

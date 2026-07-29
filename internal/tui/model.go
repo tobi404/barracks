@@ -327,6 +327,10 @@ func (m *model) layout() {
 	}
 	w, _ := m.paneWidths()
 	body := m.bodyHeight()
+	// The help bar is the widest thing the footer draws, and left unbounded it
+	// is what makes the frame wider than the terminal - which costs the user
+	// the end of it, where `q dismissed` is.
+	m.help.SetWidth(maxInt(1, m.w-2))
 	// The pane is a border (2 rows), a title line, and the viewport. Getting
 	// this wrong by one makes the two panes end on different rows, which is the
 	// first thing the eye catches.
@@ -341,6 +345,13 @@ func (m *model) layout() {
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

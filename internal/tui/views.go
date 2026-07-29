@@ -28,6 +28,12 @@ const (
 	// legendRows is what the posture key costs the pane: a blank line, the
 	// heading, and one line per glyph.
 	legendRows = 6
+
+	// cardWidthMax is how wide a card in front of the roster is drawn when the
+	// terminal can hold it, and cardChrome is what one costs in rows before any
+	// of its own: two border rows, and the padding above and below.
+	cardWidthMax = 64
+	cardChrome   = 4
 )
 
 func (m *model) View() tea.View {
@@ -49,17 +55,32 @@ func (m *model) View() tea.View {
 		// y, and it is the compositor that flattens the hierarchy and applies
 		// the offsets. Composing the layers straight onto a canvas silently
 		// paints both at the origin.
-		v.SetContent(lipgloss.NewCompositor(
+		return m.fit(&v, lipgloss.NewCompositor(
 			lipgloss.NewLayer(screenContent).Z(0),
 			lipgloss.NewLayer(overlay).
 				X(maxInt(0, (m.w-lipgloss.Width(overlay))/2)).
 				Y(maxInt(0, (m.h-lipgloss.Height(overlay))/2)).
 				Z(1),
 		).Render())
-		return v
 	}
-	v.SetContent(screenContent)
-	return v
+	return m.fit(&v, screenContent)
+}
+
+// fit is the one place the frame is bounded to the terminal it is drawn on.
+//
+// Everything above budgets for its own size, and this is what makes that a
+// guarantee rather than an intention. The alternate screen does not scroll a
+// frame larger than itself, it clips it, and what falls off is the bottom and
+// the right: the status line, the help bar, and the last thing a card says.
+// An overlay is the way this is most easily broken, because the compositor's
+// bounds are the union of its layers, so a card taller than the screen takes
+// the whole frame with it.
+func (m *model) fit(v *tea.View, content string) tea.View {
+	v.SetContent(lipgloss.NewStyle().
+		MaxWidth(maxInt(1, m.w)).
+		MaxHeight(maxInt(1, m.h)).
+		Render(content))
+	return *v
 }
 
 func (m *model) header() string {
@@ -81,10 +102,14 @@ func (m *model) header() string {
 			deployed++
 		}
 	}
+	// The counts are what the line is for, and a deep repository path is what
+	// would otherwise push them off the right of the screen, so the path is the
+	// half that gives way.
+	counts := fmt.Sprintf("%d mustered · %d standing here", len(m.st.Units), deployed)
 	line := fmt.Sprintf(" %s %s   %s",
 		m.th.label.Render("ground"),
-		m.th.body.Render(where),
-		m.th.faint.Render(fmt.Sprintf("%d mustered · %d standing here", len(m.st.Units), deployed)))
+		m.th.body.Render(truncate(where, maxInt(8, m.w-len([]rune(counts))-11))),
+		m.th.faint.Render(counts))
 
 	rule := m.th.subtitle.Render(strings.Repeat("─", maxInt(1, m.w)))
 	return lipgloss.JoinVertical(lipgloss.Left, top, rule, line)
@@ -320,65 +345,149 @@ func (m *model) overlay() string {
 	return ""
 }
 
+// cardWidth is how wide a card is drawn: its natural width, or whatever the
+// terminal can hold when that is less.
+func (m *model) cardWidth() int { return minInt(cardWidthMax, maxInt(24, m.w-4)) }
+
+// cardText is the columns a card's own text has, inside its border and padding.
+// Every line a card draws is cut to this rather than left to wrap, because a
+// line that wraps is a row the card did not budget for.
+func (m *model) cardText() int { return maxInt(8, m.cardWidth()-8) }
+
+// cardRows is how many rows of that text this terminal leaves inside a card.
+func (m *model) cardRows() int { return maxInt(1, m.h-cardChrome) }
+
+// card renders rows as the card in front of the roster. Every overlay goes
+// through here: bounding one of them is not the rule, the rule is that nothing
+// barracks draws over the roster may outgrow the screen it is drawn on.
+func (m *model) card(rows ...string) string { return m.cardOf(m.cardWidth(), rows) }
+
+// fittedCard is a card that takes the width of what it holds, for the one
+// overlay whose content is laid out in columns something else has already
+// sized. Cutting that to the standard width would wrap the columns into each
+// other rather than shorten them.
+func (m *model) fittedCard(rows []string) string { return m.cardOf(0, rows) }
+
+func (m *model) cardOf(width int, rows []string) string {
+	s := m.th.modal.MaxHeight(maxInt(1, m.h))
+	if width > 0 {
+		s = s.Width(width)
+	}
+	return s.Render(strings.Join(rows, "\n"))
+}
+
+// elide keeps at most n of rows, cutting the middle out and saying how many
+// went with it.
+//
+// Nothing is ever dropped in silence: a card that quietly showed eight of a
+// spawn's thirty skills would read exactly like a spawn that installed eight.
+func (m *model) elide(rows []string, n int) []string {
+	if n >= len(rows) {
+		return rows
+	}
+	if n <= 0 {
+		return nil
+	}
+	marker := func(k int) string { return m.th.faint.Render(fmt.Sprintf("… %d more", k)) }
+	if n == 1 {
+		return []string{marker(len(rows))}
+	}
+	front := n / 2
+	back := n - front - 1
+	out := append([]string{}, rows[:front]...)
+	out = append(out, marker(len(rows)-front-back))
+	return append(out, rows[len(rows)-back:]...)
+}
+
 func (m *model) confirmModal() string {
 	u, ok := m.selected()
 	if !ok {
 		return ""
 	}
-	var b strings.Builder
-	fmt.Fprintln(&b, m.th.title.Render(strings.ToUpper(m.pending.verb())+" ORDER"))
-	fmt.Fprintln(&b)
+	text := m.cardText()
+	rows := []string{m.th.title.Render(strings.ToUpper(m.pending.verb()) + " ORDER"), ""}
 	switch m.pending {
 	case orderDeploy:
-		fmt.Fprintf(&b, "%s\n", m.th.body.Render(fmt.Sprintf("Send %s into %s?", u.Loadout.Name, filepath.Base(m.st.Root))))
-		fmt.Fprintf(&b, "%s\n", m.th.faint.Render(fmt.Sprintf("%d sources · %d skills · %s", len(u.Loadout.Equipment), u.SkillCount(), targetLabel(u.Loadout))))
-		fmt.Fprintf(&b, "%s\n", m.th.faint.Render("Symlinks from the shared store. git status stays clean."))
+		rows = append(rows,
+			m.th.body.Render(truncate(fmt.Sprintf("Send %s into %s?", u.Loadout.Name, filepath.Base(m.st.Root)), text)),
+			m.th.faint.Render(truncate(fmt.Sprintf("%d %s · %d %s · %s",
+				len(u.Loadout.Equipment), plural(len(u.Loadout.Equipment), "source", "sources"),
+				u.SkillCount(), plural(u.SkillCount(), "skill", "skills"),
+				targetLabel(u.Loadout)), text)),
+			m.th.faint.Render(truncate("Symlinks from the shared store. git status stays clean.", text)))
 	case orderRecall:
-		fmt.Fprintf(&b, "%s\n", m.th.body.Render(fmt.Sprintf("Stand %s down from %s?", u.Loadout.Name, filepath.Base(m.st.Root))))
-		fmt.Fprintf(&b, "%s\n", m.th.faint.Render(fmt.Sprintf("%d live %s here.", len(u.Here), plural(len(u.Here), "spawn", "spawns"))))
+		rows = append(rows,
+			m.th.body.Render(truncate(fmt.Sprintf("Stand %s down from %s?", u.Loadout.Name, filepath.Base(m.st.Root)), text)),
+			m.th.faint.Render(truncate(fmt.Sprintf("%d live %s here.", len(u.Here), plural(len(u.Here), "spawn", "spawns")), text)))
 	}
-	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, m.th.faint.Render("y confirm   n stand down"))
-	return m.th.modal.Render(b.String())
+	rows = append(rows, "", m.th.faint.Render("y confirm   n stand down"))
+	return m.card(rows...)
 }
 
 func (m *model) workingModal() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s %s\n\n", m.sp.View(), m.th.title.Render("MOVING OUT"))
-	fmt.Fprintln(&b, m.th.faint.Render("forming up..."))
-	return m.th.modal.Width(64).Render(b.String())
+	return m.card(
+		m.sp.View()+" "+m.th.title.Render("MOVING OUT"),
+		"",
+		m.th.faint.Render("forming up..."))
 }
 
 func (m *model) outcomeModal() string {
-	var b strings.Builder
+	text := m.cardText()
+
+	var head, body []string
 	if m.result.Err != nil {
-		fmt.Fprintln(&b, m.th.fail.Render("REFUSED"))
-		fmt.Fprintln(&b)
-		fmt.Fprintln(&b, m.th.body.Render(wrap(m.result.Err.Error(), 58)))
+		head = append(head, m.th.fail.Render("REFUSED"), "")
+		for _, line := range strings.Split(wrap(m.result.Err.Error(), text), "\n") {
+			body = append(body, m.th.body.Render(line))
+		}
 	} else {
-		fmt.Fprintln(&b, m.th.ok.Render(strings.ToUpper(m.result.Title)))
-		fmt.Fprintln(&b)
+		head = append(head, m.th.ok.Render(strings.ToUpper(m.result.Title)), "")
 		for _, line := range m.result.Lines {
-			fmt.Fprintln(&b, m.th.body.Render(truncate(line, 58)))
+			body = append(body, m.th.body.Render(truncate(line, text)))
 		}
 	}
+
+	// A notice is wrapped rather than cut, for the reason wrap exists: it names
+	// the path barracks declined to touch, and half a path is not one.
+	var notices []string
 	for _, n := range m.result.Notices {
-		fmt.Fprintln(&b, m.th.fail.Render("! "+truncate(n, 58)))
+		for _, line := range strings.Split(wrap("! "+n, text), "\n") {
+			notices = append(notices, m.th.fail.Render(line))
+		}
 	}
-	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, m.th.faint.Render("any key to return to the roster"))
-	return m.th.modal.Width(64).Render(b.String())
+	foot := []string{"", m.th.faint.Render("any key to return to the roster")}
+
+	// What gives way when the card cannot hold all of it, in order. A notice is
+	// a path barracks declined to touch and is the last thing that may go; the
+	// hint is the only thing that says how to leave this card at all. The body
+	// is a list of what a spawn installed, and a list can be counted instead of
+	// read, so it is what is cut - never those two. The one row held back for it
+	// is the difference between a card that says twenty-two skills are not shown
+	// and a card on which they were never mentioned.
+	rows := m.cardRows()
+	keep := minInt(1, len(body))
+	notices = m.elide(notices, rows-len(head)-len(foot)-keep)
+	body = m.elide(body, rows-len(head)-len(notices)-len(foot))
+
+	var out []string
+	out = append(out, head...)
+	out = append(out, body...)
+	out = append(out, notices...)
+	out = append(out, foot...)
+	return m.card(out...)
 }
 
 func (m *model) helpModal() string {
-	var b strings.Builder
-	fmt.Fprintln(&b, m.th.title.Render("ORDERS"))
-	fmt.Fprintln(&b)
-	fmt.Fprint(&b, m.help.FullHelpView(m.keys.FullHelp()))
-	fmt.Fprintln(&b)
-	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, m.th.faint.Render("any key to return"))
-	return m.th.modal.Render(b.String())
+	// A copy, sized to what a card can hold on this terminal: the footer's bar
+	// is still the width of the screen, and this one is inside a border, six
+	// columns of padding and a margin.
+	h := m.help
+	h.SetWidth(maxInt(8, m.w-10))
+
+	rows := []string{m.th.title.Render("ORDERS"), ""}
+	rows = append(rows, strings.Split(h.FullHelpView(m.keys.FullHelp()), "\n")...)
+	rows = append(rows, "", m.th.faint.Render("any key to return"))
+	return m.fittedCard(rows)
 }
 
 func titled(s string, th theme) string {

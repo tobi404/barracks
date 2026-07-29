@@ -363,6 +363,17 @@ deliberate decision, not a refactor.
   everything *around* the roster stays covered without one. The one other thing that needs a
   loop is the terminal handover below, and `model.exec` is the seam for that: `tui.Frame`
   substitutes it and `FrameAndTerminal` returns what the order wrote while it was away.
+- **The frame is the size of the terminal, and what does not fit is cut where it is built.**
+  The alternate screen clips a larger frame rather than scrolling it, and a card is the
+  easiest way to grow one, because the compositor's bounds are the union of its layers. So
+  every producer budgets before it draws - `rosterPane` reserves its non-unit rows,
+  `outcomeModal` reserves head and foot, the help bar is given a width so it elides itself -
+  and `model.fit` is the single backstop that makes it structural rather than intended. When
+  a card cannot hold everything, what gives way is fixed and is not a layout question: the
+  body of a report is cut first because a list can be counted instead of read, then notices,
+  and never the closing hint, which is the only thing that says how to leave. Whatever is cut
+  says how much it stood for (`model.elide`) - a card silently showing eight of thirty skills
+  reads exactly like a spawn that installed eight.
 - **Nothing barracks writes to a stream may reach the alternate screen - and nothing may be
   dropped to keep it out.** While the roster owns the terminal, `cli.Env.captureStreams`
   redirects `Env.Out` and `Env.Err` into a buffer, and `capturedLines` folds what they said
