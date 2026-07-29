@@ -64,7 +64,7 @@ shells out to git for every fetch and every resolve. Upgrade with `brew upgrade 
 
 ### Go
 
-Any platform with Go 1.24+:
+Any platform with Go 1.25+:
 
 ```bash
 go install github.com/tobi404/barracks@latest
