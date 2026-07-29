@@ -723,6 +723,54 @@ func TestTheHarnessRefusesAKeyItCannotPress(t *testing.T) {
 	keyPress("f10")
 }
 
+// The other half of the same rule, and the half the test above cannot see. Its
+// fixture is deliberately short, so a change that stopped the viewport from
+// scrolling *at all* - swallowing its keys, or dropping the widget - would go on
+// passing while a dossier longer than its pane quietly lost everything below the
+// fold. Only the horizontal axis had no business being reachable; the vertical
+// one is what the pane is for.
+//
+// The key is taken from the viewport's own keymap rather than written down, for
+// the same reason the test above derives its list: this must follow the widget
+// if bubbles ever respells it.
+func TestALongDossierStillScrollsDownButNeverSideways(t *testing.T) {
+	alpha := unitLoadout("alpha", "a")
+	alpha.Description = "the loadout every clone of this repository is expected to be carrying"
+	for i := range 24 {
+		alpha.Equipment[0].Skills = append(alpha.Equipment[0].Skills, fmt.Sprintf("skill-%02d", i))
+	}
+	cfg := withActions(cfgFor(fakeRecords{root: "/repo", loadouts: []*loadout.Loadout{alpha}}))
+	const w, h = 80, 24
+
+	m := newModel(cfg)
+	m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+	if n, height := m.vp.TotalLineCount(), m.vp.Height(); n <= height {
+		t.Fatalf("the dossier is %d lines in a %d-line pane, so there is nothing below the fold to scroll to", n, height)
+	}
+	if strings.Contains(plain(m.View().Content), "skill-23") {
+		t.Fatal("the whole dossier is already on screen, so paging it proves nothing")
+	}
+
+	down := viewport.DefaultKeyMap().PageDown.Keys()
+	if len(down) == 0 {
+		t.Fatal("the viewport advertises no way to page down, so nothing here was driven")
+	}
+	// Enough pages to reach the foot of this fixture, so the assertion is about
+	// the last line of the dossier rather than about how tall a page happens to be.
+	script := []string{down[0], down[0], down[0], down[0]}
+	if paged := plain(Frame(cfg, w, h, script...)); !strings.Contains(paged, "skill-23") {
+		t.Errorf("%q did not scroll the dossier down to what was below the fold:\n%s", down[0], paged)
+	}
+
+	// And the axis that was turned off stays off, on a dossier long enough that
+	// the widget has every reason to move.
+	for _, name := range viewport.DefaultKeyMap().Right.Keys() {
+		if got := plain(Frame(cfg, w, h, name)); got != plain(Frame(cfg, w, h)) {
+			t.Errorf("%q scrolled the dossier sideways:\n%s", name, got)
+		}
+	}
+}
+
 // widgetKeys reads every key.Binding field off a widget's keymap. It is
 // reflective on purpose: a keymap the roster does not own can grow a field, and
 // a hand-written list of fields would go on passing without it.

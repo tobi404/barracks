@@ -552,12 +552,12 @@ each is pinned at and the skills each contributed, and every place it is current
 
 From it you can deploy the unit under the cursor five ways: spawn it (`s`), recall it (`r`),
 commit it into the repository (`g`), bring its sources forward (`u`), or run an agent with it
-(`L`). Every one puts the order in front of you before anything happens, and every one runs
-the same engine the commands do - the same target detection, the same symlinks, the same
-`.git/info/exclude` registration, the same all-or-nothing rollback, the same refusals. A
-spawn made from the roster is indistinguishable on disk from one made at the prompt, and
-anything barracks declines to touch is reported in the roster's own panel rather than
-swallowed by it.
+(`L`). Every one puts the order in front of you before anything in this repository changes,
+and every one runs the same engine the commands do - the same target detection, the same
+symlinks, the same `.git/info/exclude` registration, the same all-or-nothing rollback, the
+same refusals. A spawn made from the roster is indistinguishable on disk from one made at
+the prompt, and anything barracks declines to touch is reported in the roster's own panel
+rather than swallowed by it.
 
 The deploy order lets you choose where it goes. It opens on exactly the agents a plain
 `barracks spawn` would have picked, and if you leave it alone that is what happens - the
@@ -865,7 +865,8 @@ barracks assign editor --auto                             # or hand it back to d
 The declaration is a `targets:` list in the loadout's YAML file, so it can also be edited
 by hand. At spawn time barracks takes the first of these that applies:
 
-1. `--target` given on this invocation - for this spawn only, never written back.
+1. `--target` given on this invocation, or the agents ticked by hand in
+   [the roster](#the-roster)'s deploy picker - for this spawn only, never written back.
 2. The loadout's own declaration.
 3. The agent `barracks run` is about to launch, if the command names one barracks knows,
    together with whichever agents already have a configuration directory here (`.cursor/`,
@@ -881,10 +882,11 @@ it says which agents it is reusing and why.
 When barracks decides for you - case 3 or 4 - it says so before it spawns, so a spawn never
 lands somewhere unexpected in silence.
 
-Only `barracks run` contributes case 3's first half, because it is the only command that
-knows which agent is about to read the skills. It never widens an explicit choice: if
-`--target` or the loadout's declaration installs nowhere the agent being launched reads,
-barracks warns and installs where you asked anyway. Targets that share a directory count -
+Only `barracks run` - and [the roster](#the-roster)'s `L`, which starts the same session -
+contributes case 3's first half, because starting the agent is the only way barracks knows
+which one is about to read the skills. It never widens an explicit choice: if `--target` or
+the loadout's declaration installs nowhere the agent being launched reads, barracks warns
+and installs where you asked anyway. Targets that share a directory count -
 `--target agents -- opencode` installs somewhere opencode does read, so nothing is warned
 about.
 
