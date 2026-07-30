@@ -102,20 +102,43 @@ func isSkillDir(dir string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
+// Selection is one set of --only/--except glob patterns.
+//
+// It exists so that a filter can be passed around as one value rather than as
+// two slices that could be handed over in the wrong order. `equip` stores its
+// selection on the loadout and `spawn` applies one to a single deployment, and
+// both mean the same thing by the same string because both end up here.
+type Selection struct {
+	Only   []string
+	Except []string
+}
+
+// Narrows reports whether this selection would leave anything out. An empty
+// selection is not a filter at all, and callers rely on that being decidable
+// without running it: it is the difference between "the whole loadout" and "a
+// deliberately chosen part of it".
+func (s Selection) Narrows() bool { return len(s.Only) > 0 || len(s.Except) > 0 }
+
+// Apply is Filter with the patterns carried together.
+func (s Selection) Apply(skills []Skill) ([]Skill, error) {
+	return Filter(skills, s.Only, s.Except)
+}
+
 // Filter applies --only and --except glob patterns to a discovered set.
 //
 // Patterns match either the skill name or its source-relative path, so both
 // "react" and "skills/react" select the same skill.
 func Filter(skills []Skill, only, except []string) ([]Skill, error) {
-	if err := validatePatterns(append(append([]string{}, only...), except...)); err != nil {
+	literal := literalPatterns(skills, only, except)
+	if err := validatePatterns(literal, only, except); err != nil {
 		return nil, err
 	}
 	out := make([]Skill, 0, len(skills))
 	for _, s := range skills {
-		if len(only) > 0 && !matchAny(only, s) {
+		if len(only) > 0 && !matchAny(only, s, literal) {
 			continue
 		}
-		if matchAny(except, s) {
+		if matchAny(except, s, literal) {
 			continue
 		}
 		out = append(out, s)
@@ -123,8 +146,43 @@ func Filter(skills []Skill, only, except []string) ([]Skill, error) {
 	return out, nil
 }
 
-func matchAny(patterns []string, s Skill) bool {
+// literalPatterns is the patterns that spell one of these skills' name or path
+// exactly, and are therefore not globs.
+//
+// A skill is a directory on somebody else's disk and may legitimately be called
+// `report[1]`, which path.Match reads as a character class selecting `report1`
+// and not the directory itself. Naming a skill exactly has to mean that skill:
+// the roster's picker reports the names it drew, so a name it showed installing
+// a *different* skill is the two surfaces meaning different things by one
+// choice. This changes nothing for an ordinary pattern - a name with no
+// metacharacter matches only itself as a glob too - so the rule bites exactly
+// where it has to and nowhere else.
+func literalPatterns(skills []Skill, sets ...[]string) map[string]bool {
+	spelled := make(map[string]bool, 2*len(skills))
+	for _, s := range skills {
+		spelled[s.Name] = true
+		spelled[s.RelPath] = true
+	}
+	out := map[string]bool{}
+	for _, set := range sets {
+		for _, p := range set {
+			if spelled[p] {
+				out[p] = true
+			}
+		}
+	}
+	return out
+}
+
+// matchAny reports whether any pattern selects this skill.
+func matchAny(patterns []string, s Skill, literal map[string]bool) bool {
 	for _, p := range patterns {
+		if p == s.Name || p == s.RelPath {
+			return true
+		}
+		if literal[p] {
+			continue // it names a skill exactly, so it is not also a glob
+		}
 		if ok, _ := path.Match(p, s.Name); ok {
 			return true
 		}
@@ -135,10 +193,23 @@ func matchAny(patterns []string, s Skill) bool {
 	return false
 }
 
-func validatePatterns(patterns []string) error {
-	for _, p := range patterns {
-		if _, err := path.Match(p, ""); err != nil {
-			return fmt.Errorf("bad pattern %q: %w", p, err)
+// validatePatterns rejects a malformed glob, skipping the patterns that spell a
+// discovered skill exactly.
+//
+// A literal is never handed to path.Match, so its syntax is not a question that
+// can be asked of it: `report[1` is a legal directory name and an illegal glob,
+// and validating it as one would refuse the very deployment the literal rule
+// exists to make possible. A malformed pattern that names no discovered skill
+// is still a typo, and still reported.
+func validatePatterns(literal map[string]bool, sets ...[]string) error {
+	for _, set := range sets {
+		for _, p := range set {
+			if literal[p] {
+				continue
+			}
+			if _, err := path.Match(p, ""); err != nil {
+				return fmt.Errorf("bad pattern %q: %w", p, err)
+			}
 		}
 	}
 	return nil

@@ -35,13 +35,32 @@ func (u unit) Deployed() bool { return len(u.Here) > 0 || u.Away > 0 || u.Commit
 // SkillCount is how many skills the definition currently records.
 func (u unit) SkillCount() int { return u.Loadout.SkillCount() }
 
+// Narrowed reports whether any spawn of this unit here carries only part of it.
+//
+// It is what the posture column says out loud. A row reading "deployed" over a
+// spawn holding three of a unit's eight skills is the roster asserting something
+// untrue, and the user finds out from the skills the agent cannot see - which is
+// exactly the failure the posture column exists to prevent.
+func (u unit) Narrowed() bool {
+	for _, l := range u.Here {
+		if l.Narrowed() {
+			return true
+		}
+	}
+	return false
+}
+
 // Status is the one-word posture shown in the roster.
 func (u unit) Status() string {
 	switch {
+	case u.Committed != nil && len(u.Here) > 0 && u.Narrowed():
+		return "held+part"
 	case u.Committed != nil && len(u.Here) > 0:
 		return "held+out"
 	case u.Committed != nil:
 		return "held"
+	case len(u.Here) > 0 && u.Narrowed():
+		return "partial"
 	case len(u.Here) > 0:
 		return "deployed"
 	case u.Away > 0:
@@ -141,6 +160,31 @@ func shortCommit(c string) string {
 		return c
 	}
 	return c[:7]
+}
+
+// skillNames is every skill the loadout's definition records, name-sorted and
+// without repeats.
+//
+// It is read from the definition the roster already holds - the same field the
+// dossier lists and the SKL column counts - so choosing which skills to deploy
+// costs no git command, no store lookup and no path of its own. The engine
+// resolves the names against the store when the spawn runs, exactly as it does
+// for a --only given at the prompt, so a definition that has gone stale is
+// caught in one place rather than two.
+func skillNames(l *loadout.Loadout) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, eq := range l.Equipment {
+		for _, s := range eq.Skills {
+			if seen[s] {
+				continue
+			}
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // targetLabel renders a loadout's declared targets, or says that it has none.

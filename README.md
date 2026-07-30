@@ -51,7 +51,8 @@ One loadout, three ways to put it somewhere.
 - **[`barracks spawn`](./docs/commands.md#barracks-spawn-loadout) - yours.** Symlinks into
   your own store, kept out of git via `.git/info/exclude`, gone when the lease ends. Use it
   when the skill set is your own preference: nobody else has to agree, and nothing appears in
-  anyone's diff.
+  anyone's diff. `--only` and `--except` send
+  [part of a loadout](./docs/commands.md#sending-part-of-a-loadout) without redefining it.
 - **[`barracks garrison`](./docs/commands.md#barracks-garrison-loadout) - your team's.** Real
   file content, **committed**, with a `barracks.lock` recording every source, commit and file
   digest. Everyone who clones gets the same skills without installing barracks at all, and

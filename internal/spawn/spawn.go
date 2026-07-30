@@ -29,6 +29,12 @@ var ErrAlreadySpawned = errors.New("loadout already spawned here")
 // it did not create. barracks never overwrites.
 var ErrOccupied = errors.New("target path already occupied")
 
+// ErrNothingSelected means the deployment's own --only/--except left no skills
+// to install. It is deliberately distinct from an unequipped loadout: the
+// loadout carries skills and the user's narrowing matched none of them, and
+// telling them to equip a source would send them to fix the wrong thing.
+var ErrNothingSelected = errors.New("no skills selected for this deployment")
+
 // Request describes one spawn.
 type Request struct {
 	Loadout  *loadout.Loadout
@@ -38,12 +44,23 @@ type Request struct {
 	Kind     lease.Kind
 	Duration time.Duration
 	Owner    *lease.Owner
+	// Skills narrows this deployment to some of the loadout's skills, and is
+	// empty for the whole loadout.
+	//
+	// It applies to this spawn and to nothing else: the loadout definition is
+	// never touched, so a recall and a plain spawn put the whole unit back out.
+	// What it resolved to is recorded on the lease, which is what makes the
+	// narrowing survive an upgrade without being re-derived from a pattern.
+	Skills skill.Selection
 }
 
 // Result is what a spawn produced.
 type Result struct {
-	Lease   *lease.Lease
-	Skills  []Placed
+	Lease  *lease.Lease
+	Skills []Placed
+	// Skipped is how many of the loadout's skills this deployment's own
+	// selection left behind. Zero for an ordinary spawn.
+	Skipped int
 	Fetched int
 	Notices []string
 }
@@ -131,15 +148,31 @@ func (e *Engine) Resolve(ctx context.Context, req Request) (Location, error) {
 
 // Plan is the set of skills a loadout would place, resolved against the store.
 type Plan struct {
-	Skills  []Placed
-	Fetched int
+	Skills []Placed
+	// Available is every distinct skill the loadout offers at its pinned
+	// commits, before this deployment's own selection narrowed it. It is what
+	// lets a selection that matched nothing say what there was to choose from
+	// instead of sending the user off to equip a source they already have.
+	//
+	// It is a set of names rather than a tally of what each source contributed,
+	// because both readers are counting skills the user can name: a selection is
+	// applied before the collision check, so a name two sources provide is one
+	// choice, and reporting it twice reads as barracks having lost count.
+	Available []string
+	Fetched   int
 }
 
 // Materialise ensures every source in the loadout is in the store and returns
 // the skills it contributes, with collisions rejected.
-func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string) (Plan, error) {
+//
+// sel narrows this deployment and nothing else. It is applied after each
+// source's own --only/--except - the loadout's filter says what the unit
+// carries, this one says how much of it is going out - and before the collision
+// check, so a deployment may name its way past a clash the definition has.
+func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string, sel skill.Selection) (Plan, error) {
 	var plan Plan
 	seen := map[string]string{}
+	available := map[string]bool{}
 
 	for _, eq := range l.Equipment {
 		if eq.Commit == "" {
@@ -160,7 +193,15 @@ func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string
 		if err != nil {
 			return Plan{}, err
 		}
-		for _, s := range found {
+		for _, name := range skill.Names(found) {
+			available[name] = true
+		}
+
+		selected, err := sel.Apply(found)
+		if err != nil {
+			return Plan{}, err
+		}
+		for _, s := range selected {
 			if prev, dup := seen[s.Name]; dup {
 				return Plan{}, fmt.Errorf("skill %q is provided by both %s and %s; use --only or --except to disambiguate", s.Name, prev, eq.Ident())
 			}
@@ -173,6 +214,10 @@ func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string
 			})
 		}
 	}
+	for name := range available {
+		plan.Available = append(plan.Available, name)
+	}
+	sort.Strings(plan.Available)
 	sort.Slice(plan.Skills, func(i, j int) bool { return plan.Skills[i].Name < plan.Skills[j].Name })
 	return plan, nil
 }
@@ -194,12 +239,21 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 
-	plan, err := e.Materialise(ctx, req.Loadout, loc.Dir)
+	plan, err := e.Materialise(ctx, req.Loadout, loc.Dir, req.Skills)
 	if err != nil {
 		return nil, err
 	}
 	if len(plan.Skills) == 0 {
-		return nil, fmt.Errorf("loadout %q has no skills to spawn; equip it with a source first", req.Loadout.Name)
+		if len(plan.Available) == 0 {
+			return nil, fmt.Errorf("loadout %q has no skills to spawn; equip it with a source first", req.Loadout.Name)
+		}
+		// The loadout carries skills and this deployment's own narrowing kept
+		// none of them. Naming what there was to choose from is the difference
+		// between a message that fixes a typo and one that reads as barracks
+		// having lost the loadout.
+		return nil, fmt.Errorf("%w: it matched none of the %d %s %s carries: %s",
+			ErrNothingSelected, len(plan.Available), plural(len(plan.Available), "skill", "skills"),
+			req.Loadout.Name, strings.Join(plan.Available, ", "))
 	}
 
 	// Refuse before creating anything if a destination is taken. A path the
@@ -233,6 +287,11 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 		CreatedAt: e.now().UTC(),
 		Owner:     req.Owner,
 		Sources:   provenance(req.Loadout),
+	}
+	if req.Skills.Narrows() {
+		// The names it resolved to, never the patterns: see Lease.Selection for
+		// why re-running a glob later is how a narrowed deployment widens.
+		l.Selection = placedNames(plan.Skills)
 	}
 	if l.Kind == "" {
 		l.Kind = lease.KindManual
@@ -279,7 +338,12 @@ func (e *Engine) Spawn(ctx context.Context, req Request) (*Result, error) {
 		l.Links = append(l.Links, lease.Link{Path: s.Path, Target: s.Target, Skill: s.Name, Source: s.Source})
 	}
 
-	result := &Result{Lease: l, Skills: plan.Skills, Fetched: plan.Fetched}
+	result := &Result{
+		Lease:   l,
+		Skills:  plan.Skills,
+		Skipped: len(plan.Available) - len(plan.Skills),
+		Fetched: plan.Fetched,
+	}
 
 	// Register in .git/info/exclude, never .gitignore: a spawn must leave
 	// `git status` clean without touching a committed file.
@@ -381,6 +445,23 @@ func provenance(l *loadout.Loadout) []lease.SourceRef {
 		})
 	}
 	return out
+}
+
+// placedNames is the skill names a plan will put down, in the order they were
+// planned - which Materialise has already sorted.
+func placedNames(placed []Placed) []string {
+	out := make([]string, len(placed))
+	for i, p := range placed {
+		out[i] = p.Name
+	}
+	return out
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // unwinder undoes a partially completed spawn.

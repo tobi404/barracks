@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/tobi404/barracks/internal/gitcmd"
 	"github.com/tobi404/barracks/internal/lease"
 	"github.com/tobi404/barracks/internal/loadout"
+	"github.com/tobi404/barracks/internal/skill"
 	"github.com/tobi404/barracks/internal/source"
 	"github.com/tobi404/barracks/internal/store"
 	"github.com/tobi404/barracks/internal/target"
@@ -66,10 +68,10 @@ func newScene(t *testing.T, skills ...testutil.Skill) *scene {
 	return s
 }
 
-// loadout builds a loadout equipped with the fixture repo.
-func (s *scene) loadout(t *testing.T, name, subpath string, only, except []string) *loadout.Loadout {
+// equipment pins one fixture repo as a source.
+func (s *scene) equipment(t *testing.T, repo *testutil.GitRepo, subpath string, only, except []string) loadout.Equipment {
 	t.Helper()
-	raw := s.src.Dir
+	raw := repo.Dir
 	if subpath != "" {
 		raw += "#main:" + subpath
 	}
@@ -81,10 +83,16 @@ func (s *scene) loadout(t *testing.T, name, subpath string, only, except []strin
 	if err != nil {
 		t.Fatal(err)
 	}
+	return loadout.Equipment{Source: src, Commit: commit, Only: only, Except: except}
+}
+
+// loadout builds a loadout equipped with the fixture repo.
+func (s *scene) loadout(t *testing.T, name, subpath string, only, except []string) *loadout.Loadout {
+	t.Helper()
 	return &loadout.Loadout{
 		Name:      name,
 		CreatedAt: fixedNow,
-		Equipment: []loadout.Equipment{{Source: src, Commit: commit, Only: only, Except: except}},
+		Equipment: []loadout.Equipment{s.equipment(t, s.src, subpath, only, except)},
 	}
 }
 
@@ -434,14 +442,14 @@ func TestMaterialiseReportsFetchCount(t *testing.T) {
 	s := newScene(t)
 	l := s.loadout(t, "frontend", "", nil, nil)
 
-	plan, err := s.engine.Materialise(ctx(), l, s.skillsDir())
+	plan, err := s.engine.Materialise(ctx(), l, s.skillsDir(), skill.Selection{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if plan.Fetched != 1 {
 		t.Errorf("first Materialise fetched %d sources, want 1", plan.Fetched)
 	}
-	plan, err = s.engine.Materialise(ctx(), l, s.skillsDir())
+	plan, err = s.engine.Materialise(ctx(), l, s.skillsDir(), skill.Selection{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -782,4 +790,190 @@ func TestSpawnWithoutACommittedGuardIsUnchanged(t *testing.T) {
 	if _, err := s.engine.Spawn(ctx(), s.request(s.loadout(t, "frontend", "", nil, nil))); err != nil {
 		t.Fatalf("Spawn = %v, want success", err)
 	}
+}
+
+// A deployment may carry part of a loadout, and what it carried is what the
+// lease says - links for exactly those skills, and a selection recording the
+// choice so nothing later has to re-derive it from a pattern.
+func TestASelectionDeploysPartOfALoadoutAndTheLeaseSaysSo(t *testing.T) {
+	s := newScene(t, testutil.Skill{Path: "skills/react"}, testutil.Skill{Path: "skills/css"}, testutil.Skill{Path: "skills/legacy"})
+	req := s.request(s.loadout(t, "frontend", "skills", nil, nil))
+	req.Skills = skill.Selection{Only: []string{"react", "css"}}
+
+	res, err := s.engine.Spawn(ctx(), req)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got := names(res.Skills); !reflect.DeepEqual(got, []string{"css", "react"}) {
+		t.Fatalf("the spawn placed %v, want css and react", got)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("the spawn reported %d skills left behind, want 1", res.Skipped)
+	}
+	if testutil.Exists(filepath.Join(s.skillsDir(), "legacy")) {
+		t.Error("a skill the selection left out was installed anyway")
+	}
+	for _, name := range []string{"react", "css"} {
+		if !testutil.IsSymlink(t, filepath.Join(s.skillsDir(), name)) {
+			t.Errorf("%s was not linked", name)
+		}
+	}
+
+	saved, err := s.leases.Get(res.Lease.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !saved.Narrowed() {
+		t.Fatal("the lease does not record that this deployment was narrowed")
+	}
+	if !reflect.DeepEqual(saved.Selection, []string{"css", "react"}) {
+		t.Errorf("the lease recorded selection %v, want css and react", saved.Selection)
+	}
+	if len(saved.Links) != 2 {
+		t.Errorf("the lease recorded %d links, want 2", len(saved.Links))
+	}
+	// The definition is untouched: this is a deployment, not a redefinition.
+	if n := len(req.Loadout.Equipment[0].Only); n != 0 {
+		t.Errorf("the spawn wrote its filter into the loadout: %v", req.Loadout.Equipment[0].Only)
+	}
+	for _, name := range []string{"css", "react", "legacy"} {
+		if !saved.CarriesSkill(name) != (name == "legacy") {
+			t.Errorf("CarriesSkill(%q) = %v on a spawn narrowed to css and react", name, saved.CarriesSkill(name))
+		}
+	}
+}
+
+// An ordinary spawn records no selection at all, which is what leaves an
+// upgrade free to install a skill that appears upstream. Empty and "narrowed to
+// everything" have to stay different answers.
+func TestAWholeSpawnRecordsNoSelection(t *testing.T) {
+	s := newScene(t)
+	res, err := s.engine.Spawn(ctx(), s.request(s.loadout(t, "frontend", "skills", nil, nil)))
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if res.Lease.Narrowed() {
+		t.Errorf("an unnarrowed spawn recorded a selection: %v", res.Lease.Selection)
+	}
+	if res.Skipped != 0 {
+		t.Errorf("an unnarrowed spawn reported %d skills left behind", res.Skipped)
+	}
+	if !res.Lease.CarriesSkill("anything-at-all") {
+		t.Error("an unnarrowed spawn refused a skill it never excluded")
+	}
+}
+
+// A selection that keeps nothing is refused, and refused as its own thing: the
+// loadout is fine and the filter is what missed, so the message names what
+// there was to choose from rather than sending the user off to equip a source
+// they already have.
+func TestASelectionThatKeepsNothingIsRefusedInItsOwnWords(t *testing.T) {
+	s := newScene(t, testutil.Skill{Path: "skills/react"}, testutil.Skill{Path: "skills/css"})
+	req := s.request(s.loadout(t, "frontend", "skills", nil, nil))
+	req.Skills = skill.Selection{Only: []string{"no-such-skill"}}
+
+	_, err := s.engine.Spawn(ctx(), req)
+	if !errors.Is(err, ErrNothingSelected) {
+		t.Fatalf("Spawn err = %v, want ErrNothingSelected", err)
+	}
+	for _, want := range []string{"react", "css"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %s was available: %v", want, err)
+		}
+	}
+	if testutil.Exists(s.skillsDir()) {
+		t.Error("a refused spawn left a skills directory behind")
+	}
+
+	// And a loadout that genuinely carries nothing still gets the other
+	// message, because the fix is a different one.
+	empty := &loadout.Loadout{Name: "hollow", CreatedAt: fixedNow}
+	_, err = s.engine.Spawn(ctx(), s.request(empty))
+	if err == nil || !strings.Contains(err.Error(), "equip it with a source") {
+		t.Errorf("an unequipped loadout err = %v, want the equip message", err)
+	}
+}
+
+// A selection is per deployment, so the same loadout can stand in two
+// repositories carrying different halves of itself.
+func TestTwoDeploymentsOfOneLoadoutCarryDifferentSelections(t *testing.T) {
+	s := newScene(t, testutil.Skill{Path: "skills/react"}, testutil.Skill{Path: "skills/css"})
+	l := s.loadout(t, "frontend", "skills", nil, nil)
+
+	first := s.request(l)
+	first.Skills = skill.Selection{Only: []string{"react"}}
+	a, err := s.engine.Spawn(ctx(), first)
+	if err != nil {
+		t.Fatalf("first spawn: %v", err)
+	}
+
+	other := testutil.NewGitRepo(t, filepath.Join(s.root, "other"))
+	testutil.WriteFile(t, filepath.Join(other.Dir, "README.md"), "hello\n")
+	other.Commit(t, "initial")
+	second := s.request(l)
+	second.Cwd = other.Dir
+	second.Skills = skill.Selection{Except: []string{"react"}}
+	b, err := s.engine.Spawn(ctx(), second)
+	if err != nil {
+		t.Fatalf("second spawn: %v", err)
+	}
+
+	if !reflect.DeepEqual(a.Lease.Selection, []string{"react"}) {
+		t.Errorf("the first deployment recorded %v", a.Lease.Selection)
+	}
+	if !reflect.DeepEqual(b.Lease.Selection, []string{"css"}) {
+		t.Errorf("the second deployment recorded %v", b.Lease.Selection)
+	}
+}
+
+// A selection is applied before the collision check, so a deployment may name
+// its way past a clash the definition has - and in exactly that case a skill
+// name two sources provide is one choice the user had, not two. Counting it
+// twice would say three skills were left behind where two were, and list the
+// same name twice in a refusal, which reads as barracks having lost the loadout
+// rather than as a filter that missed.
+func TestASkillTwoSourcesProvideCountsOnceAmongWhatWasOffered(t *testing.T) {
+	s := newScene(t, testutil.Skill{Path: "skills/css"}, testutil.Skill{Path: "skills/react"})
+	second := testutil.NewSkillRepo(t, filepath.Join(s.root, "src2"),
+		testutil.Skill{Path: "skills/css"}, testutil.Skill{Path: "skills/vue"})
+
+	l := s.loadout(t, "frontend", "skills", nil, nil)
+	l.Equipment = append(l.Equipment, s.equipment(t, second, "skills", nil, nil))
+
+	req := s.request(l)
+	req.Skills = skill.Selection{Only: []string{"react"}}
+	res, err := s.engine.Spawn(ctx(), req)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got := names(res.Skills); !reflect.DeepEqual(got, []string{"react"}) {
+		t.Fatalf("the spawn placed %v, want react alone", got)
+	}
+	if res.Skipped != 2 {
+		t.Errorf("the spawn reported %d skills left behind, want 2 (css and vue)", res.Skipped)
+	}
+
+	// And the refusal names each distinct skill once.
+	other := testutil.NewGitRepo(t, filepath.Join(s.root, "other"))
+	testutil.WriteFile(t, filepath.Join(other.Dir, "README.md"), "hello\n")
+	other.Commit(t, "initial")
+	miss := s.request(l)
+	miss.Cwd = other.Dir
+	miss.Skills = skill.Selection{Only: []string{"no-such-skill"}}
+
+	_, err = s.engine.Spawn(ctx(), miss)
+	if !errors.Is(err, ErrNothingSelected) {
+		t.Fatalf("Spawn err = %v, want ErrNothingSelected", err)
+	}
+	if !strings.Contains(err.Error(), "the 3 skills frontend carries: css, react, vue") {
+		t.Errorf("the refusal counted or listed a skill twice: %v", err)
+	}
+}
+
+func names(placed []Placed) []string {
+	out := make([]string, len(placed))
+	for i, p := range placed {
+		out[i] = p.Name
+	}
+	return out
 }

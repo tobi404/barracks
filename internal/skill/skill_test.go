@@ -202,3 +202,97 @@ func TestNamesOnEmpty(t *testing.T) {
 		t.Fatalf("Names(nil) = %v, want empty", got)
 	}
 }
+
+// A pattern that is a skill's own name selects that skill, whatever characters
+// the name happens to contain.
+//
+// A skill is a directory on somebody else's disk and may legitimately be called
+// `report[1]`, which path.Match reads as a character class matching `report1`
+// and not the directory itself. The roster's skill picker reports exactly the
+// names it drew, so without the literal test a name it showed would select a
+// different skill or none at all - and the two surfaces would mean different
+// things by the same choice.
+func TestALiteralNameSelectsItselfWhateverItIsCalled(t *testing.T) {
+	skills := []Skill{
+		{Name: "report[1]", RelPath: "skills/report[1]"},
+		{Name: "report1", RelPath: "skills/report1"},
+		{Name: "react", RelPath: "skills/react"},
+		{Name: "report[1", RelPath: "skills/report[1"},
+	}
+
+	got, err := Filter(skills, []string{"report[1]"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "report[1]" {
+		t.Fatalf("--only 'report[1]' selected %v, want the directory of that name", Names(got))
+	}
+
+	// The path spelling is literal too, and globbing still works either way.
+	got, _ = Filter(skills, []string{"skills/report[1]"}, nil)
+	if len(got) != 1 || got[0].Name != "report[1]" {
+		t.Errorf("the path spelling selected %v", Names(got))
+	}
+	got, _ = Filter(skills, []string{"re*"}, nil)
+	if len(got) != 4 {
+		t.Errorf("a glob stopped matching: %v", Names(got))
+	}
+	// And a literal name still excludes exactly itself.
+	got, _ = Filter(skills, nil, []string{"report[1]"})
+	if !reflect.DeepEqual(Names(got), []string{"report1", "react", "report[1"}) {
+		t.Errorf("--except 'report[1]' left %v", Names(got))
+	}
+
+	// A name that is not a legal glob at all is the case the whole rule exists
+	// for: `report[1` is a directory somebody can create and a syntax error
+	// path.Match refuses to answer for. The literal test has to be reached
+	// before validation, or the picker's own name would be rejected as a typo.
+	got, err = Filter(skills, []string{"report[1"}, nil)
+	if err != nil {
+		t.Fatalf("--only 'report[1' was rejected: %v", err)
+	}
+	if !reflect.DeepEqual(Names(got), []string{"report[1"}) {
+		t.Errorf("--only 'report[1' selected %v, want the directory of that name", Names(got))
+	}
+	got, err = Filter(skills, nil, []string{"report[1"})
+	if err != nil {
+		t.Fatalf("--except 'report[1' was rejected: %v", err)
+	}
+	if !reflect.DeepEqual(Names(got), []string{"report[1]", "report1", "react"}) {
+		t.Errorf("--except 'report[1' left %v", Names(got))
+	}
+}
+
+// A Selection is the two flags carried as one value, and whether it narrows at
+// all has to be decidable without running it: that is the difference between
+// "the whole loadout" and "a deliberately chosen part of it", and a spawn
+// records a selection on its lease only for the second.
+func TestSelectionNarrowsOnlyWhenItHasPatterns(t *testing.T) {
+	skills := []Skill{{Name: "a", RelPath: "a"}, {Name: "b", RelPath: "b"}}
+
+	var none Selection
+	if none.Narrows() {
+		t.Error("an empty selection claims to narrow")
+	}
+	got, err := none.Apply(skills)
+	if err != nil || len(got) != 2 {
+		t.Errorf("an empty selection filtered something out: %v (%v)", Names(got), err)
+	}
+
+	for _, sel := range []Selection{{Only: []string{"a"}}, {Except: []string{"b"}}} {
+		if !sel.Narrows() {
+			t.Errorf("%+v does not claim to narrow", sel)
+		}
+		got, err := sel.Apply(skills)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(Names(got), []string{"a"}) {
+			t.Errorf("%+v kept %v, want a", sel, Names(got))
+		}
+	}
+
+	if _, err := (Selection{Only: []string{"["}}).Apply(skills); err == nil {
+		t.Error("a malformed pattern was accepted")
+	}
+}

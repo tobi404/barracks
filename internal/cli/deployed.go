@@ -104,8 +104,16 @@ with the repository rather than with the machine.
 				}
 			}
 			for _, l := range shown {
-				fmt.Fprintf(env.Out, "%s  %d %s  [%s]  %s\n",
-					l.Loadout, len(l.Links), plural(len(l.Links), "skill", "skills"),
+				// A narrowed spawn carries fewer skills than its loadout does,
+				// and a count on its own cannot say which of the two that is.
+				// Reading "2 skills" here and "5 skills" from `barracks list` is
+				// how a deliberate choice gets mistaken for a broken deployment.
+				narrowed := ""
+				if l.Narrowed() {
+					narrowed = "  (narrowed at spawn)"
+				}
+				fmt.Fprintf(env.Out, "%s  %d %s%s  [%s]  %s\n",
+					l.Loadout, len(l.Links), plural(len(l.Links), "skill", "skills"), narrowed,
 					l.Kind, l.Describe(env.now()))
 				fmt.Fprintf(env.Out, "    target: %s (%s)\n", l.Target, displayOf(l.Target))
 				fmt.Fprintf(env.Out, "    %s: %s\n", l.Scope, l.Dir)

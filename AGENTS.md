@@ -183,17 +183,31 @@ deliberate decision, not a refactor.
   `spawn.Engine.SpawnAll` too: it returns a `spawn.RollbackError` carrying every
   `lease.Report`, and `cli.Env.spawnAll` is the one choke point that prints them with
   `reportKept`.
-- **`Lease.Links` is the undo record; `Lease.Sources` is provenance.** Only `Links` is ever
-  acted on by revocation. `Sources` records which sources a spawn was materialised from so
-  upgrade can re-attach one that momentarily exported no skills - the links that would
-  otherwise prove it are exactly what such a source destroys. It gates *additions* only;
-  no removal may ever consult it, or provenance would start widening what gets deleted.
+- **`Lease.Links` is the undo record; `Lease.Sources` and `Lease.Selection` are provenance.**
+  Only `Links` is ever acted on by revocation. `Sources` records which sources a spawn was
+  materialised from so upgrade can re-attach one that momentarily exported no skills - the
+  links that would otherwise prove it are exactly what such a source destroys. Both gate
+  *additions* only, in the one place `upgrade.planSpawn` decides them, and no removal may ever
+  consult either, or provenance would start widening what gets deleted.
+- **A deployment may carry part of a loadout, and the loadout never learns of it.**
+  `spawn --only/--except` fills `spawn.Request.Skills` (a `skill.Selection`), applied in
+  `Materialise` after each source's own filter and before the collision check. Decided by the
+  captain on 2026-07-30, along with the scope: `garrison` and `run` deploy whole loadouts and
+  are deliberately not part of it. `Lease.Selection` records the **resolved skill names**, never
+  the patterns - re-running `--only 'react-*'` at upgrade time would install a `react-native`
+  that appeared afterwards, which is the silent widening the feature exists not to do. Empty
+  means the whole loadout, which is what an ordinary spawn must stay, so `upgrade` still adds
+  what appears upstream to an unnarrowed spawn; `TestAnUpgradeStillWidensASpawnThatWasNeverNarrowed`
+  is the half that catches a gate written as "fewer links than the loadout has".
 - **The lease record is versioned, and a reader asks what a version *carries*.** Compare
   against the version the field landed in (`lease.provenanceSince`), never against
   `lease.FormatVersion` - bumping the format for one new field would otherwise declare every
   other field missing from every record on disk. A record too old for a field falls back to
   the behaviour it was written under; reading the absence as an empty set would turn every
-  pre-existing lease into a mass deletion.
+  pre-existing lease into a mass deletion. `Selection` is the deliberate exception and carries
+  no `<field>Since`: absence and empty are the same answer for it, so the field alone is
+  right on a record from any build, and a constant nothing consults is decoration.
+  `TestSelectionIsAbsentOrEmptyAndBothMeanTheWholeLoadout` holds it.
 - **A process lease never trusts a bare PID.** `lease.Owner` carries a start token from
   `internal/proc`; a live PID with a different token is a dead lease. When the prober cannot
   tell, the lease is treated as alive - barracks would rather leak a symlink than delete one
@@ -444,6 +458,28 @@ deliberate decision, not a refactor.
   is untouched, only the sentence is the roster's. The menu itself is `target.Registry` via
   `cli.targetOptions`, and the launch menu is the registry's own `Binaries` filtered by
   `exec.LookPath` - an entry that is not installed is a key that does nothing, one step later.
+- **The picker is one list with several bands, and `touched` belongs to the band.** A deploy
+  card offers TARGETS and SKILLS, and they are one widget with one cursor rather than two
+  lists and a focus key, so ↑/↓/space is still the whole interaction and nothing can drift
+  apart. Per-band `touched` is the load-bearing part: ticking a skill must not turn the
+  detected agents into an explicit choice, or narrowing a deployment would silently pin it to
+  that day's detection. Bands are addressed by id (`groupTargets`, `groupSkills`, `groupAgent`)
+  and never by index, and each opens on its own `Chosen` set - a target ID and a skill name
+  are different namespaces, and a loadout carrying a skill called `cursor` must not open the
+  Cursor agent ticked. The skills band is `tui.skillNames`, read from the definition the
+  roster already holds (the field the dossier lists and the SKL column counts), so choosing
+  skills still costs no path, no git command and no store - and nothing is memoised.
+- **A card's give-way order is fixed, and the sentence naming the unit is part of the head.**
+  `views.confirmModal`: the foot goes last because it is the only thing that says how to
+  leave; the head - title *and* "Send frontend into work?" - is never cut, because a
+  `DEPLOY ORDER` for nobody in particular is worse than no card; the picker is never cut below
+  the cursor's row; the prose shrinks, with one row held back so what it stood for is counted.
+  That held row is itself given up when it is the difference between a picker and none.
+  `pickerRows` draws the largest window whose *rendered* rows fit rather than reserving chrome
+  for every band up front - a heading pair is drawn only for a band the window reaches, and
+  reserving four rows on a card that has five made the picker vanish at 80x12. Prove a layout
+  change at 80x24 with a long list (`TestTheDeployCardHoldsTheFrameWithAVeryLongSkillList`), not
+  at a comfortable width.
 - **Nothing barracks writes to a stream may reach the alternate screen - and nothing may be
   dropped to keep it out.** While the roster owns the terminal, `cli.Env.captureStreams`
   redirects `Env.Out` and `Env.Err` into **two** buffers, and `capturedReport`/`capturedNotices`
@@ -513,6 +549,12 @@ deliberate decision, not a refactor.
   On linux it reads `/proc/<pid>/stat` (start time + ppid). Keep the extra discriminators.
 - `git ls-remote` only emits the peeled `^{}` line for an annotated tag when a pattern
   matches it explicitly - `gitcmd.ResolveRef` passes those spellings deliberately.
+- In `skill.Filter` a pattern that spells a discovered skill's name or path *exactly* is a
+  literal, not a glob (`literalPatterns`). A skill is a directory on somebody else's disk and
+  may be called `report[1]`, which `path.Match` reads as a class selecting `report1` instead.
+  The roster's picker reports the names it drew, so without the rule a ticked name could
+  install a different skill. It changes nothing for an ordinary pattern, which matches only
+  itself as a glob anyway.
 - `source.Validate` must reject `.` and `..` segments explicitly; they otherwise pass the
   safe-character regex and would escape the store.
 - On macOS `/tmp` is a symlink to `/private/tmp`, so git-reported repo roots differ from

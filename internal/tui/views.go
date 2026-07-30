@@ -27,7 +27,7 @@ const (
 
 	// legendRows is what the posture key costs the pane: a blank line, the
 	// heading, and one line per glyph.
-	legendRows = 6
+	legendRows = 7
 
 	// cardWidthMax is how wide a card in front of the roster is drawn when the
 	// terminal can hold it, and cardChrome is what one costs in rows before any
@@ -228,6 +228,7 @@ func (m *model) rosterPane() string {
 		}
 		rows = append(rows, "", m.th.label.Render("POSTURE"),
 			legend(m.th.badge, "●", "spawned", "symlinked, lease-held"),
+			legend(m.th.badge, "◐", "partial", "some of its skills only"),
 			legend(lipgloss.NewStyle().Foreground(m.th.held), "▣", "held", "committed here"),
 			legend(m.th.faint, "○", "afield", "standing in another repo"),
 			legend(m.th.faint, "·", "reserve", "deployed nowhere"))
@@ -269,12 +270,25 @@ func (m *model) postureBadge(u unit) string {
 	case u.Committed != nil:
 		return lipgloss.NewStyle().Foreground(m.th.held).Render("▣ " + s)
 	case len(u.Here) > 0:
-		return m.th.badge.Render("● " + s)
+		// A half-filled disc for a half-deployed unit, so the difference is
+		// visible without reading the word beside it - and without opening the
+		// dossier, which is where a user would otherwise have to go to find out
+		// that half the unit is not there.
+		return m.th.badge.Render(deployedGlyph(u) + " " + s)
 	case u.Away > 0:
 		return m.th.faint.Render("○ " + s)
 	default:
 		return m.th.faint.Render("· " + s)
 	}
+}
+
+// deployedGlyph is the disc a spawned unit carries: full, or half for one that
+// went out with only part of its skills.
+func deployedGlyph(u unit) string {
+	if u.Narrowed() {
+		return "◐"
+	}
+	return "●"
 }
 
 func (m *model) dossierPane() string {
@@ -329,8 +343,20 @@ func (m *model) dossier(u unit, w int) string {
 		fmt.Fprintf(&b, "     %s\n", m.th.faint.Render("barracks.lock · no lease, never reaped"))
 	}
 	for _, ls := range u.Here {
-		fmt.Fprintf(&b, "  %s %s\n", m.th.badge.Render("●"), m.th.body.Render(describeLease(ls)))
+		glyph := "●"
+		if ls.Narrowed() {
+			glyph = "◐"
+		}
+		fmt.Fprintf(&b, "  %s %s\n", m.th.badge.Render(glyph), m.th.body.Render(describeLease(ls, u.SkillCount())))
 		fmt.Fprintf(&b, "     %s\n", m.th.faint.Render(truncate(relativeTo(m.st.Root, ls.Dir), w-5)))
+		// Only a narrowed spawn names its skills here. For a whole one the
+		// EQUIPMENT section above already lists exactly the same set, and
+		// repeating it would bury the one case where the two differ.
+		if ls.Narrowed() {
+			for _, link := range ls.Links {
+				fmt.Fprintf(&b, "       %s\n", m.th.faint.Render(truncate(link.Skill, w-8)))
+			}
+		}
 	}
 	if u.Away > 0 {
 		fmt.Fprintf(&b, "  %s\n", m.th.faint.Render(fmt.Sprintf("○ %d %s elsewhere on this machine", u.Away, plural(u.Away, "spawn", "spawns"))))
@@ -352,8 +378,15 @@ func relativeTo(root, path string) string {
 	return path
 }
 
-func describeLease(l *lease.Lease) string {
-	return fmt.Sprintf("%s · %d %s · %s", l.Target, len(l.Links), plural(len(l.Links), "skill", "skills"), l.Kind)
+// describeLease is one spawn's headline. A narrowed one is counted against what
+// the unit carries rather than on its own, because "3 skills" beside a unit with
+// eight of them reads as a deployment that has lost five.
+func describeLease(l *lease.Lease, carried int) string {
+	count := fmt.Sprintf("%d %s", len(l.Links), plural(len(l.Links), "skill", "skills"))
+	if l.Narrowed() && carried > len(l.Links) {
+		count = fmt.Sprintf("%d of %d skills", len(l.Links), carried)
+	}
+	return fmt.Sprintf("%s · %s · %s", l.Target, count, l.Kind)
 }
 
 func (m *model) footer() string {
@@ -446,9 +479,15 @@ func (m *model) confirmModal() string {
 		len(u.Loadout.Equipment), plural(len(u.Loadout.Equipment), "source", "sources"),
 		u.SkillCount(), plural(u.SkillCount(), "skill", "skills"))
 
+	// The sentence naming the unit and the repository is part of the head, not
+	// the body, because it is the only thing on the card that says what is about
+	// to happen and to what. The body below it explains the order and can be
+	// counted instead of read; this cannot, and a card offering eleven rows of
+	// choices on a 24-row terminal is exactly where it would otherwise be the
+	// first thing elided - leaving a DEPLOY ORDER for nobody in particular.
 	head := []string{m.th.title.Render(strings.ToUpper(m.pending.verb()) + " ORDER"), ""}
 	var body []string
-	line := func(s string) { body = append(body, m.th.body.Render(truncate(s, text))) }
+	line := func(s string) { head = append(head, m.th.body.Render(truncate(s, text))) }
 	dim := func(s string) { body = append(body, m.th.faint.Render(truncate(s, text))) }
 
 	// Every line below is written to fit cardProse columns, which is what a
@@ -461,6 +500,10 @@ func (m *model) confirmModal() string {
 		dim(sources + " · " + targetLabel(u.Loadout))
 		dim("Symlinks from the shared store.")
 		dim("git status stays clean.")
+		// Said on the card because it is the one thing about the skills band a
+		// user cannot read off it: unticking here changes this deployment and
+		// leaves the unit whole.
+		dim("Skills unticked here go back next spawn.")
 	case orderRecall:
 		line(fmt.Sprintf("Stand %s down from %s?", u.Loadout.Name, filepath.Base(m.st.Root)))
 		dim(fmt.Sprintf("%d live %s here.", len(u.Here), plural(len(u.Here), "spawn", "spawns")))
@@ -487,13 +530,24 @@ func (m *model) confirmModal() string {
 		foot = append([]string{"", m.th.fail.Render(truncate(m.note, text))}, foot...)
 	}
 
-	// What gives way when the card cannot hold all of it. The picker is a
-	// choice, so it is never cut below the row the cursor is on - a choice you
-	// cannot see is a choice you cannot make - and the prose that explains the
-	// order is what shrinks first.
+	// What gives way when the card cannot hold all of it, in order. The foot is
+	// the only thing that says how to leave; the head names the unit and the
+	// repository, which is what the user is being asked about at all; the picker
+	// is never cut below the row the cursor is on, because a choice you cannot
+	// see is a choice you cannot make. So the prose that explains the order is
+	// what shrinks, and one row is held back for it so that what it stood for is
+	// still counted rather than dropped in silence.
+	//
+	// That last row is itself given up when it is the difference between a
+	// picker and no picker at all - on a terminal that short, an order with no
+	// visible choices is worse than one whose explanation went unmentioned.
 	rows := m.cardRows()
-	choices := m.pickerRows(rows - len(head) - len(foot) - 1)
-	body = m.elide(body, rows-len(head)-len(foot)-len(choices))
+	avail := rows - len(head) - len(foot)
+	choices := m.pickerRows(avail - minInt(1, len(body)))
+	if len(choices) == 0 {
+		choices = m.pickerRows(avail)
+	}
+	body = m.elide(body, avail-len(choices))
 
 	out := append([]string{}, head...)
 	out = append(out, body...)
@@ -528,31 +582,57 @@ func (m *model) confirmHint(width int) string {
 	return forms[len(forms)-1]
 }
 
-// pickerRows is the picker's own band of the card, in at most n rows, or none
+// pickerRows is the picker's own part of the card, in at most n rows, or none
 // when there is nothing to choose.
 //
-// The heading and the "showing this many" line are paid for out of n before a
-// single option is drawn, for the reason every producer budgets for itself: the
-// compositor's bounds are the union of its layers, so a card that overran here
+// How many rows a window of the options costs is not the size of that window: a
+// heading pair is drawn only for a band the window actually reaches, and the
+// "showing this many" line only when it does not reach everything. That makes
+// the budget depend on the window and the window on the budget, so this asks the
+// question the only way it stays honest - it draws the largest window whose
+// rows fit, and settles for a smaller one otherwise. The alternative, reserving
+// chrome for every band up front, costs four rows on a card that may only have
+// five, and a picker that vanishes on a short terminal is worse than one that
+// shows a single row of it. n is a hard ceiling either way, because the
+// compositor's bounds are the union of its layers and a card that overran here
 // would take the whole frame off the screen with it.
+//
+// It is also the whole of the long-list guard: a loadout carrying a thousand
+// skills is windowed to what the terminal has, exactly as a registry of five
+// agents is, and says how much it is not showing.
 func (m *model) pickerRows(n int) []string {
-	if len(m.pick.options) == 0 || n < 3 {
+	if len(m.pick.options) == 0 || n < 1 {
 		return nil
 	}
+	// Spaced first, and the blank line that separates the picker from the prose
+	// above it is the last thing given up before the choices themselves.
+	for _, spaced := range []bool{true, false} {
+		for budget := n; budget >= 1; budget-- {
+			if rows := m.pickerWindow(budget, spaced); len(rows) <= n {
+				return rows
+			}
+		}
+	}
+	return nil
+}
+
+// pickerWindow draws budget options of the picker, with a heading over each
+// band it reaches and a count of what it left out.
+func (m *model) pickerWindow(budget int, spaced bool) []string {
 	text := m.cardText()
-	title := "TARGETS"
-	if !m.pick.multi {
-		title = "AGENT"
-	}
-	rows := []string{"", m.th.label.Render(title)}
-	budget := n - len(rows)
 	first, last := m.pick.window(budget)
-	if last-first < len(m.pick.options) {
-		budget--
-		first, last = m.pick.window(budget)
-	}
+
+	var rows []string
+	band := -1
 	for i := first; i < last; i++ {
 		o := m.pick.options[i]
+		if o.Group != band {
+			band = o.Group
+			if len(rows) > 0 || spaced {
+				rows = append(rows, "")
+			}
+			rows = append(rows, m.th.label.Render(m.pick.groups[band].Title))
+		}
 		box := "[ ]"
 		if m.pick.on[i] {
 			box = "[x]"
