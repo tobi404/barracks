@@ -64,11 +64,18 @@ type Owner struct {
 // reader asks whether a record is new enough to carry the field it wants, by
 // comparing against the version that field landed in - provenanceSince below,
 // and one such constant per field added from here on.
-const FormatVersion = 2
+// Version 3 added Selection. It carries no <field>Since constant of its own on
+// purpose, and that is the exception rather than a lapse: a reader needs one
+// only when the *absence* of a field means something different from its zero
+// value. Sources absent means "this record predates provenance", which is not
+// an empty set. Selection absent means the spawn was never narrowed, which is
+// exactly what an empty Selection means - so every reader gets the right answer
+// from the field alone, and a constant nothing consults would be decoration.
+const FormatVersion = 3
 
 // provenanceSince is the record version Lease.Sources was introduced in. It is
-// deliberately not FormatVersion: the two are equal today and must be free to
-// diverge the moment an unrelated field bumps the format.
+// deliberately not FormatVersion: the two must be free to diverge the moment an
+// unrelated field bumps the format, which is what Selection has now done.
 const provenanceSince = 2
 
 // SourceRef records one source a spawn was materialised from.
@@ -125,10 +132,47 @@ type Lease struct {
 	// provenanceSince, which is not the same as "carries nothing" - see
 	// HasProvenance.
 	Sources []SourceRef `yaml:"sources,omitempty"`
+	// Selection is the skills this deployment was deliberately narrowed to.
+	// Empty means the whole loadout, which is what every spawn made before
+	// `spawn --only` existed was.
+	//
+	// It is the skill *names* the narrowing resolved to, not the glob patterns
+	// that produced them. Re-running a pattern later is how a narrowed
+	// deployment would silently widen: `--only 'react-*'` re-evaluated after
+	// react-native appeared upstream would install a skill the user never chose.
+	//
+	// Like Sources it is provenance and gates *additions* only - see
+	// CarriesSkill. Links remains the complete record of what is on disk and the
+	// only thing revocation acts on. A removal that consulted this would start
+	// deleting on the strength of a record, which is the one direction provenance
+	// may never travel.
+	Selection []string `yaml:"selection,omitempty"`
 	// CreatedDirs are directories barracks made and may remove if they end up
 	// empty again. Deepest last.
 	CreatedDirs []string           `yaml:"created_dirs,omitempty"`
 	Exclude     *gitexclude.Record `yaml:"exclude,omitempty"`
+}
+
+// Narrowed reports whether this deployment carries only part of its loadout.
+func (l *Lease) Narrowed() bool { return len(l.Selection) > 0 }
+
+// CarriesSkill reports whether this deployment's selection admits a skill.
+//
+// An un-narrowed spawn admits everything, which is what keeps an ordinary
+// upgrade free to install a skill that appeared upstream. A narrowed one admits
+// exactly what it was deployed with - so a skill that vanished and came back is
+// re-linked rather than stranded, and one the user left behind is never
+// installed by an upgrade they only asked to move the others forward.
+func (l *Lease) CarriesSkill(name string) bool {
+	if len(l.Selection) == 0 {
+		return true
+	}
+	for _, s := range l.Selection {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }
 
 // HasProvenance reports whether Sources can be trusted as the complete set of

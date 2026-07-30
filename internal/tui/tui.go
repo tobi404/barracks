@@ -63,10 +63,15 @@ type Config struct {
 	// statement as naming the same agents by hand, because it leaves the
 	// loadout's declaration and the repository's own evidence in charge.
 	//
+	// skills is the same shape for the other band: nil is the whole loadout, and
+	// a list is `barracks spawn --only` for this deployment and no other. The
+	// loadout is never modified either way, so a later spawn with nothing chosen
+	// puts the whole unit back out.
+	//
 	// It runs with the terminal handed back to it - see terminalJob - so it
 	// reports to Session rather than drawing on the roster, and anything it
 	// starts may prompt there and be answered.
-	Deploy func(ctx context.Context, l *loadout.Loadout, targets []string, s Session) Outcome
+	Deploy func(ctx context.Context, l *loadout.Loadout, targets, skills []string, s Session) Outcome
 	// Recall removes every spawn of a loadout in this scope. The committed tier
 	// is deliberately not part of it - see the roster's recall order.
 	Recall func(ctx context.Context, l *loadout.Loadout) Outcome

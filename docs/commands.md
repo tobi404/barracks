@@ -143,6 +143,8 @@ barracks spawn frontend                    # until you recall it
 barracks spawn frontend --for 2h           # until the clock runs out
 barracks spawn frontend --global           # into your user-level skills directories
 barracks spawn frontend --target opencode  # just this once, for a different agent
+barracks spawn frontend --only 'react-*'   # just these skills, just this once
+barracks spawn frontend --except legacy    # everything but this one, just this once
 ```
 
 A loadout declaring two agents reaches both in this one command. A `--target` given here
@@ -150,8 +152,38 @@ applies to this spawn only and never changes what the loadout declares. If any o
 fails, the whole spawn is rolled back - a two-agent spawn is one action, so it never half
 happens.
 
+### Sending part of a loadout
+
+`--only` and `--except` take the same glob patterns [`barracks equip`](#barracks-equip-loadout-source)
+takes, matching on a skill's name or its path inside its source. The difference is
+persistence, and it is the whole point of them:
+
+| | Where it lives | How long it lasts |
+|---|---|---|
+| `barracks equip … --only` | In the loadout definition | Until you equip that source again |
+| `barracks spawn … --only` | In this deployment's lease | Until you recall it |
+
+The loadout is never modified. Recall and spawn again with nothing said and the whole unit
+goes back out. The same loadout can stand in two repositories carrying different halves of
+itself, and `barracks deployed` marks a narrowed one so a smaller count is never mistaken
+for a deployment that has lost something.
+
+A later [`barracks upgrade`](#barracks-upgrade-loadout) keeps a narrowed deployment
+narrowed: the skills you chose move onto the new commits, and the ones you left behind stay
+behind - including a skill that appears upstream after the spawn was made. A chosen skill
+that disappears upstream and comes back is re-linked by the next upgrade rather than
+stranded.
+
+A selection that matches no skill at all is refused, and the refusal names what the loadout
+carries.
+
+The roster's deploy card offers the same choice as a ticked list beside the target list -
+see [the roster](./roster.md). Both go through one code path, so neither surface can deploy
+something the other cannot.
+
 A spawn is yours alone: symlinks into your own store, kept out of git, gone when the lease
 ends. To give a whole team one skill set, [garrison it](#barracks-garrison-loadout) instead.
+`garrison` and `run` always deploy the whole loadout.
 
 ## `barracks garrison [<loadout>]`
 

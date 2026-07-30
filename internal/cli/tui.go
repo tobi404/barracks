@@ -14,6 +14,7 @@ import (
 	"github.com/tobi404/barracks/internal/lease"
 	"github.com/tobi404/barracks/internal/loadout"
 	"github.com/tobi404/barracks/internal/progress"
+	"github.com/tobi404/barracks/internal/skill"
 	"github.com/tobi404/barracks/internal/spawn"
 	"github.com/tobi404/barracks/internal/target"
 	"github.com/tobi404/barracks/internal/tui"
@@ -71,8 +72,8 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 		Selection: func(l *loadout.Loadout) ([]string, string, error) {
 			return e.deployTargets(ctx, l)
 		},
-		Deploy: func(ctx context.Context, l *loadout.Loadout, chosen []string, s tui.Session) tui.Outcome {
-			return e.tuiDeploy(ctx, l, chosen, s)
+		Deploy: func(ctx context.Context, l *loadout.Loadout, chosen, skills []string, s tui.Session) tui.Outcome {
+			return e.tuiDeploy(ctx, l, chosen, skills, s)
 		},
 		Recall: func(ctx context.Context, l *loadout.Loadout) tui.Outcome {
 			return e.tuiRecall(ctx, l)
@@ -165,10 +166,16 @@ func launchers() []tui.Launcher {
 // override at all, so the loadout's declaration and the repository's own
 // evidence decide exactly as they would for `barracks spawn`.
 //
+// skills is the same, one band along: nil is the whole loadout, and a list
+// becomes the very Only the --only flag fills in, so the two surfaces reach the
+// engine through one field and cannot express different things. Names, not
+// patterns - the picker drew names, and skill.Filter matches a pattern that is a
+// skill's name literally before it treats it as a glob.
+//
 // The roster runs this with the terminal handed back to it, so the session is
 // the terminal rather than the screen; internal/tui owns that decision and this
 // only says what happened.
-func (e *Env) tuiDeploy(ctx context.Context, l *loadout.Loadout, targets []string, s tui.Session) tui.Outcome {
+func (e *Env) tuiDeploy(ctx context.Context, l *loadout.Loadout, targets, skills []string, s tui.Session) tui.Outcome {
 	restore := e.captureStreams()
 	defer restore()
 	defer e.reportTo(s)()
@@ -181,6 +188,7 @@ func (e *Env) tuiDeploy(ctx context.Context, l *loadout.Loadout, targets []strin
 		Loadout: l,
 		Cwd:     e.Cwd,
 		Kind:    lease.KindManual,
+		Skills:  skill.Selection{Only: skills},
 	}, sel.Targets)
 	if err != nil {
 		return tui.Outcome{Err: err, Notices: e.capturedNotices()}
@@ -202,6 +210,10 @@ func (e *Env) tuiDeploy(ctx context.Context, l *loadout.Loadout, targets []strin
 			sel.Targets[i].Display, len(res.Skills), plural(len(res.Skills), "skill", "skills")))
 		for _, sk := range res.Skills {
 			out.Lines = append(out.Lines, "  + "+sk.Name)
+		}
+		if res.Skipped > 0 {
+			out.Lines = append(out.Lines, fmt.Sprintf("  (%d %s left behind - this deployment only)",
+				res.Skipped, plural(res.Skipped, "skill", "skills")))
 		}
 		out.Notices = append(out.Notices, res.Notices...)
 	}

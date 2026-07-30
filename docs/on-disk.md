@@ -57,6 +57,12 @@ expired deadlines are revoked, and process leases whose owner is gone are revoke
 no daemon and no shell integration to install. A process lease records the owner's identity,
 not just its PID, so a recycled PID can never keep a dead lease alive.
 
+A lease also records the skills a deployment was deliberately narrowed to, when
+[`barracks spawn --only`](./commands.md#sending-part-of-a-loadout) was used. That record only
+ever gates what a later `barracks upgrade` may *add* - it can never widen what gets removed -
+and it is the resolved skill names rather than the patterns you typed, so a glob is never
+re-run later against skills that appeared after you chose.
+
 **barracks never deletes what it did not create.** A lease records every path it made.
 Revoking removes only those paths, and only after confirming each is still a symlink
 resolving into the barracks store. Your own `.claude/skills/my-skill/` is safe, and if

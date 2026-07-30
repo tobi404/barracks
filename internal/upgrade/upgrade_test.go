@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -1370,4 +1371,138 @@ func TestAPlanIsActionableWhenApplyingItWouldDoSomething(t *testing.T) {
 	if !stranded.Actionable() {
 		t.Error("a spawn behind its pin was called empty because nothing resolved")
 	}
+}
+
+// spawnNarrowed materialises only part of a loadout, the way
+// `barracks spawn --only` does: links for the named skills alone, and the
+// selection recorded on the lease.
+func (f *fixture) spawnNarrowed(l *loadout.Loadout, keep ...string) *lease.Lease {
+	f.t.Helper()
+	want := map[string]bool{}
+	for _, n := range keep {
+		want[n] = true
+	}
+	lz := f.spawn(l, lease.KindManual)
+
+	var links []lease.Link
+	for _, link := range lz.Links {
+		if want[link.Skill] {
+			links = append(links, link)
+			continue
+		}
+		if err := os.Remove(link.Path); err != nil {
+			f.t.Fatalf("unlink %s: %v", link.Path, err)
+		}
+	}
+	if len(links) != len(keep) {
+		f.t.Fatalf("the loadout does not carry all of %v", keep)
+	}
+	lz.Links = links
+	lz.Selection = append([]string(nil), keep...)
+	sort.Strings(lz.Selection)
+	if err := f.eng.Leases.Save(lz); err != nil {
+		f.t.Fatalf("save lease: %v", err)
+	}
+	return lz
+}
+
+// TestAnUpgradeKeepsANarrowedDeploymentNarrowed is the whole of the promise
+// `spawn --only` makes about the future, and both halves of it fail differently.
+//
+// Widening is the loud one: an upgrade that installed the skills the user
+// deliberately left behind would undo the choice at the moment they asked for
+// something else entirely, and they would find out from the agent. Stranding is
+// the quiet one, and it is the neighbourhood of the rule that a skip may never
+// become permanent: a chosen skill that vanishes upstream and comes back has to
+// come back here too, or the deployment decays a skill at a time and no command
+// ever puts it right.
+func TestAnUpgradeKeepsANarrowedDeploymentNarrowed(t *testing.T) {
+	f := newFixture(t)
+	src := f.source("kit",
+		testutil.Skill{Path: "skills/react", Body: "v1"},
+		testutil.Skill{Path: "skills/css", Body: "v1"},
+		testutil.Skill{Path: "skills/legacy", Body: "v1"})
+
+	l := f.train("frontend")
+	f.equip(l, src.Dir+"#main:skills")
+	lz := f.spawnNarrowed(l, "css", "react")
+
+	// Upstream moves under it: react changes, css disappears, a new skill
+	// arrives. Only react and css were ever chosen.
+	src.AddSkills(t, testutil.Skill{Path: "skills/react", Body: "v2"}, testutil.Skill{Path: "skills/newcomer", Body: "v1"})
+	src.RemovePath(t, "skills/css")
+	src.Commit(t, "move on")
+
+	f.upgrade("frontend", Options{})
+	saved := f.leaseOf(lz.ID)
+
+	if got := linkedSkills(saved); !reflect.DeepEqual(got, []string{"react"}) {
+		t.Fatalf("after the upgrade the deployment carries %v, want react alone", got)
+	}
+	for _, gone := range []string{"legacy", "newcomer"} {
+		if testutil.Exists(filepath.Join(f.skillsDir(), gone)) {
+			t.Errorf("the upgrade widened a narrowed deployment with %s", gone)
+		}
+	}
+	if got := body(t, filepath.Join(f.skillsDir(), "react")); got != "v2" {
+		t.Errorf("the chosen skill was not moved forward: react reads %q", got)
+	}
+	// The selection is untouched by a skill going missing. It is what the
+	// deployment chose, not what happens to be linked right now - and it is the
+	// only thing that can bring css back.
+	if !reflect.DeepEqual(saved.Selection, []string{"css", "react"}) {
+		t.Fatalf("the recorded selection became %v", saved.Selection)
+	}
+
+	// css comes back upstream. A later upgrade re-links it, because it was
+	// chosen - and still refuses the two that never were.
+	src.AddSkills(t, testutil.Skill{Path: "skills/css", Body: "v3"})
+	src.Commit(t, "css returns")
+
+	f.upgrade("frontend", Options{})
+	saved = f.leaseOf(lz.ID)
+	if got := linkedSkills(saved); !reflect.DeepEqual(got, []string{"css", "react"}) {
+		t.Fatalf("a chosen skill that came back was stranded: the deployment carries %v", got)
+	}
+	if got := body(t, filepath.Join(f.skillsDir(), "css")); got != "v3" {
+		t.Errorf("the returned skill did not come back at the new commit: css reads %q", got)
+	}
+	for _, gone := range []string{"legacy", "newcomer"} {
+		if testutil.Exists(filepath.Join(f.skillsDir(), gone)) {
+			t.Errorf("the second upgrade widened the deployment with %s", gone)
+		}
+	}
+}
+
+// The same upgrade, over a spawn that was never narrowed, still installs what
+// appeared upstream. The gate has to be the selection and not the mere fact
+// that the links are fewer than the loadout's skills, or every ordinary spawn
+// would freeze at the set it was made with.
+func TestAnUpgradeStillWidensASpawnThatWasNeverNarrowed(t *testing.T) {
+	f := newFixture(t)
+	src := f.source("kit", testutil.Skill{Path: "skills/react"})
+
+	l := f.train("frontend")
+	f.equip(l, src.Dir+"#main:skills")
+	lz := f.spawn(l, lease.KindManual)
+	if lz.Narrowed() {
+		t.Fatal("an ordinary spawn recorded a selection")
+	}
+
+	src.AddSkills(t, testutil.Skill{Path: "skills/newcomer"})
+	src.Commit(t, "a new skill upstream")
+
+	f.upgrade("frontend", Options{})
+	if got := linkedSkills(f.leaseOf(lz.ID)); !reflect.DeepEqual(got, []string{"newcomer", "react"}) {
+		t.Errorf("an unnarrowed spawn did not take the new skill: %v", got)
+	}
+}
+
+func linkedSkills(l *lease.Lease) []string {
+	out := make([]string, 0, len(l.Links))
+	for _, link := range l.Links {
+		out = append(out, link.Skill)
+	}
+	sort.Strings(out)
+	return out
 }

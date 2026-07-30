@@ -2,6 +2,7 @@ package lease
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -249,5 +250,62 @@ func TestWithTargets(t *testing.T) {
 	}
 	if got := WithTargets(leases, []string{"windsurf"}); len(got) != 0 {
 		t.Errorf("WithTargets on an unused target = %v, want nothing", ids(got))
+	}
+}
+
+// TestSelectionIsAbsentOrEmptyAndBothMeanTheWholeLoadout: Selection is the one
+// record field a reader needs no version test for, and this is why.
+//
+// Sources absent means "this record predates provenance", which is not an empty
+// set - hence HasProvenance. Selection absent means the spawn was never
+// narrowed, which is exactly what an empty Selection means, so a record written
+// by any build gives the same right answer from the field alone. Getting that
+// backwards in either direction is a live bug: a pre-selection lease read as
+// narrowed-to-nothing would have every upstream addition refused forever.
+func TestSelectionIsAbsentOrEmptyAndBothMeanTheWholeLoadout(t *testing.T) {
+	for v := 0; v <= FormatVersion+1; v++ {
+		l := &Lease{Version: v}
+		if l.Narrowed() {
+			t.Errorf("a version %d record with no selection reads as narrowed", v)
+		}
+		if !l.CarriesSkill("react") {
+			t.Errorf("a version %d record with no selection refused a skill", v)
+		}
+	}
+
+	narrowed := &Lease{Version: FormatVersion, Selection: []string{"react", "css"}}
+	if !narrowed.Narrowed() {
+		t.Fatal("a recorded selection does not read as narrowed")
+	}
+	for name, want := range map[string]bool{"react": true, "css": true, "legacy": false, "": false} {
+		if got := narrowed.CarriesSkill(name); got != want {
+			t.Errorf("CarriesSkill(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// A selection survives a round trip through the record on disk, which is the
+// only reason an upgrade run days later can still tell a narrowed deployment
+// from a loadout that happens to carry that many skills.
+func TestSelectionSurvivesTheRecord(t *testing.T) {
+	s := NewStore(t.TempDir())
+	l := &Lease{
+		Version: FormatVersion, ID: "abc", Loadout: "frontend", Target: "claude",
+		Scope: ScopeRepo, Root: "/repo", Dir: "/repo/.claude/skills", Kind: KindManual,
+		Selection: []string{"css", "react"},
+		Links:     []Link{{Path: "/repo/.claude/skills/react", Target: "/store/x", Skill: "react"}},
+	}
+	if err := s.Save(l); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get("abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Selection, []string{"css", "react"}) {
+		t.Errorf("the selection came back as %v", got.Selection)
+	}
+	if !got.Narrowed() || got.CarriesSkill("legacy") {
+		t.Errorf("the reloaded record does not narrow: %+v", got.Selection)
 	}
 }

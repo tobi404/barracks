@@ -7,15 +7,17 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/tobi404/barracks/internal/lease"
+	"github.com/tobi404/barracks/internal/skill"
 	"github.com/tobi404/barracks/internal/spawn"
 	"github.com/tobi404/barracks/internal/target"
 )
 
 func newSpawnCmd(env *Env) *cobra.Command {
 	var (
-		forDur    time.Duration
-		global    bool
-		targetIDs []string
+		forDur       time.Duration
+		global       bool
+		targetIDs    []string
+		only, except []string
 	)
 
 	cmd := &cobra.Command{
@@ -43,6 +45,19 @@ the clock passes:
   barracks spawn frontend --global
   barracks spawn frontend --target cursor --target claude
 
+Use --only and --except to send part of a loadout instead of all of it. They
+take the same glob patterns barracks equip takes and match the same way, on a
+skill's name or its path inside its source:
+
+  barracks spawn frontend --only 'react-*'
+  barracks spawn frontend --except deprecated-helper
+
+The one difference from equip is the whole point of them: equip stores its
+filter in the loadout, and these apply to this deployment only. The loadout is
+not modified, and nothing remembers them afterwards - recall and spawn again
+without them and the whole unit goes back out. An upgrade keeps a narrowed
+deployment narrowed rather than quietly filling it in.
+
 Use --global to install into each agent's user-level skills directory instead
 of the current repo. To tie a spawn to a single command's lifetime, use
 barracks run.`),
@@ -68,6 +83,7 @@ barracks run.`),
 				Global:  global,
 				Cwd:     env.Cwd,
 				Kind:    lease.KindManual,
+				Skills:  skill.Selection{Only: only, Except: except},
 			}
 			if forDur > 0 {
 				req.Kind = lease.KindDeadline
@@ -88,6 +104,11 @@ barracks run.`),
 	cmd.Flags().DurationVar(&forDur, "for", 0, "recall automatically after this long (e.g. 90m, 2h)")
 	cmd.Flags().BoolVar(&global, "global", false, "spawn into each agent's user-level skills directory")
 	cmd.Flags().StringSliceVar(&targetIDs, "target", nil, targetFlagHelp("spawn for"))
+	// The persistence is spelled out on the flag itself, not only in the long
+	// help: these are the same words `barracks equip` uses for a filter it stores
+	// forever, and a user who reaches for them from memory reads the one-liner.
+	cmd.Flags().StringSliceVar(&only, "only", nil, "deploy only skills matching these glob patterns (this deployment only; the loadout is unchanged)")
+	cmd.Flags().StringSliceVar(&except, "except", nil, "leave skills matching these glob patterns behind (this deployment only; the loadout is unchanged)")
 	return cmd
 }
 
@@ -96,6 +117,13 @@ func printSpawn(env *Env, res *spawn.Result, tgt target.Target) {
 	fmt.Fprintf(env.Out, "spawned %s into %s (%s, %s)\n", l.Loadout, l.Dir, tgt.Display, l.Describe(env.now()))
 	for _, s := range res.Skills {
 		fmt.Fprintf(env.Out, "  + %s\n", s.Name)
+	}
+	// A deployment that carries less than the unit does says so. Printing only
+	// what went out reads identically to a loadout that has just those skills,
+	// and the difference is the whole reason the flags exist.
+	if res.Skipped > 0 {
+		fmt.Fprintf(env.Out, "  (%d %s left behind - this deployment only, %s still carries them)\n",
+			res.Skipped, plural(res.Skipped, "skill", "skills"), l.Loadout)
 	}
 	if res.Fetched > 0 {
 		fmt.Fprintf(env.Out, "  (%d %s fetched into the store)\n", res.Fetched, plural(res.Fetched, "source", "sources"))

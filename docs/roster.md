@@ -15,9 +15,12 @@ barracks tui    # the same screen, named explicitly
 ```
 
 The left pane lists your units with their source count, skill count and posture - spawned
-here, committed here, standing in another repository, or in reserve. The right pane is the
-dossier for whichever unit the cursor is on: its description, its sources with the commit
-each is pinned at and the skills each contributed, and every place it is currently deployed.
+here, committed here, standing in another repository, or in reserve. A unit deployed here
+with only some of its skills reads `◐ partial` rather than `● deployed`, so half a unit is
+never reported as a whole one. The right pane is the dossier for whichever unit the cursor is
+on: its description, its sources with the commit each is pinned at and the skills each
+contributed, and every place it is currently deployed - a partial deployment counted against
+the unit (`1 of 3 skills`) and its standing skills named.
 
 From it you can deploy the unit under the cursor five ways: spawn it (`s`), recall it (`r`),
 commit it into the repository (`g`), bring its sources forward (`u`), or run an agent with it
@@ -28,10 +31,24 @@ same refusals. A spawn made from the roster is indistinguishable on disk from on
 the prompt, and anything barracks declines to touch is reported in the roster's own panel
 rather than swallowed by it.
 
-The deploy order lets you choose where it goes. It opens on exactly the agents a plain
-`barracks spawn` would have picked, and if you leave it alone that is what happens - the
-loadout's own declaration and what this repository shows stay in charge. Tick something and
-you have overridden both, for this spawn only.
+The deploy order lets you choose where it goes and how much of the unit goes. It offers two
+ticked lists, one cursor moving through both: **TARGETS**, opening on exactly the agents a
+plain `barracks spawn` would have picked, and **SKILLS**, opening on everything the loadout
+carries.
+
+Leave a list alone and it does what the command would - the loadout's own declaration and
+what this repository shows stay in charge of where it goes, and the whole unit goes out. Tick
+in a list and you have overridden that one, for this deployment only. The two are
+independent: unticking a skill does not turn the detected agents into a choice you made.
+
+Unticking skills is `barracks spawn --only` by another spelling and reaches it through the
+same code path, so the two surfaces cannot deploy different things. The loadout is not
+modified either way - recall and deploy again with nothing ticked and the whole unit goes back
+out. See [sending part of a loadout](./commands.md#sending-part-of-a-loadout) for what a later
+upgrade does with it. A deploy with nothing ticked in a list is refused on the card, naming
+which list is empty.
+
+`g` and `L` always deploy the whole loadout.
 
 `u` shows you the plan first. It re-resolves every source and reports what carrying it
 through would change - the same body `barracks upgrade --dry-run` prints, because it is the
@@ -53,7 +70,7 @@ is the one state this tier must never be left in.
 | Key | Does |
 |---|---|
 | `↑`/`k`, `↓`/`j` | move up and down the line |
-| `s` | spawn the selected unit here, choosing its targets |
+| `s` | spawn the selected unit here, choosing its targets and its skills |
 | `r` | recall its spawns from here |
 | `g` | garrison it into this repository |
 | `u` | plan an upgrade of its sources, then carry it out |

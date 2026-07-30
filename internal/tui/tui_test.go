@@ -870,14 +870,18 @@ type deployTracker struct {
 	// answers here - nil is "the picker was not touched" - so the two are kept
 	// apart rather than counted.
 	targets []string
+	// skills is the other band, and nil and empty are two different answers
+	// here for the same reason: nil is the whole loadout, and a list is a
+	// deliberately narrowed deployment.
+	skills  []string
 	got     bool
 	report  []string
 	outcome Outcome
 }
 
-func (d *deployTracker) deploy(_ context.Context, l *loadout.Loadout, targets []string, s Session) Outcome {
+func (d *deployTracker) deploy(_ context.Context, l *loadout.Loadout, targets, skills []string, s Session) Outcome {
 	d.calls++
-	d.targets, d.got = targets, true
+	d.targets, d.skills, d.got = targets, skills, true
 	for _, line := range d.report {
 		fmt.Fprintln(s.Out, line)
 	}
@@ -1467,9 +1471,10 @@ func TestThePickerStaysUsableOnASmallTerminal(t *testing.T) {
 			t.Errorf("%dx%d: the card no longer says how to leave it:\n%s", w, h, got)
 		}
 		// Either every option is drawn, or the card says how many it is not
-		// drawing. Silently showing three of five reads as a registry with
-		// three agents in it.
-		if !strings.Contains(got, "OpenCode") && !strings.Contains(got, "of 5") {
+		// drawing. Silently showing three of six reads as a registry with
+		// three agents in it. Six is the five agents plus the loadout's one
+		// skill: both bands are one list, so the count covers both.
+		if !strings.Contains(got, "OpenCode") && !strings.Contains(got, "of 6") {
 			t.Errorf("%dx%d: the picker hid options without saying so:\n%s", w, h, got)
 		}
 	}
@@ -1743,10 +1748,10 @@ func TestADeployRefusesADefinitionBarracksCannotRead(t *testing.T) {
 // a different order, as any filtering of that menu would.
 func TestTheLaunchStartsTheAgentThatWasChosenNotTheRowItSatOn(t *testing.T) {
 	m := newModel(withActions(cfgFor(fakeRecords{root: "/repo/lab"})))
-	m.pick = newPicker([]choice{
+	m.pick = newPicker(band{ID: groupAgent, Title: "AGENT", Noun: "agent", Chosen: []string{"claude"}, Options: []choice{
 		{Key: "cursor-agent", Label: "Cursor"},
 		{Key: "claude", Label: "Claude Code"},
-	}, []string{"claude"}, false)
+	}})
 
 	if got := m.launcher(); got.Command != "claude" {
 		t.Errorf("the launch would start %q, want claude", got.Command)
@@ -1754,31 +1759,49 @@ func TestTheLaunchStartsTheAgentThatWasChosenNotTheRowItSatOn(t *testing.T) {
 
 	// A key no launcher answers to starts nothing rather than the first thing
 	// on the list.
-	m.pick = newPicker([]choice{{Key: "windsurf", Label: "Windsurf"}}, []string{"windsurf"}, false)
+	m.pick = newPicker(band{ID: groupAgent, Title: "AGENT", Noun: "agent",
+		Options: []choice{{Key: "windsurf", Label: "Windsurf"}}, Chosen: []string{"windsurf"}})
 	if got := m.launcher(); got.Command != "" {
 		t.Errorf("a choice no launcher matches started %q", got.Command)
+	}
+
+	// And a launch never reads the deploy card's bands. A skill called `claude`
+	// is a directory somebody may legitimately have, and a positional or
+	// namespace-blind lookup would start an agent because a skill was ticked.
+	m.pick = newPicker(
+		band{ID: groupTargets, Title: "TARGETS", Noun: "target", Multi: true,
+			Options: []choice{{Key: "claude", Label: "Claude Code"}}, Chosen: []string{"claude"}},
+		band{ID: groupSkills, Title: "SKILLS", Noun: "skill", Multi: true,
+			Options: []choice{{Key: "cursor-agent", Label: "cursor-agent"}}, Chosen: []string{"cursor-agent"}},
+	)
+	if got := m.launcher(); got.Command != "" {
+		t.Errorf("a launch read the deploy card's bands and would start %q", got.Command)
 	}
 }
 
 // A picker is a list with a cursor, and the two are the whole of it: the keys
-// wrap, a single-choice picker can never be emptied, and nothing at all is
+// wrap, a single-choice band can never be emptied, and nothing at all is
 // reported until the user has actually chosen.
 func TestPickerKeeps(t *testing.T) {
 	options := []choice{{Key: "a", Label: "A"}, {Key: "b", Label: "B"}, {Key: "c", Label: "C"}}
+	one := func(chosen []string, multi bool) picker {
+		return newPicker(band{ID: groupTargets, Title: "TARGETS", Noun: "target",
+			Multi: multi, Options: options, Chosen: chosen})
+	}
 
-	multi := newPicker(options, []string{"b"}, true)
+	multi := one([]string{"b"}, true)
 	if multi.cursor != 1 {
 		t.Errorf("the picker did not open on the chosen option: cursor %d", multi.cursor)
 	}
-	if multi.chosen() != nil {
-		t.Errorf("an untouched picker reported a choice: %v", multi.chosen())
+	if multi.chosen(groupTargets) != nil {
+		t.Errorf("an untouched picker reported a choice: %v", multi.chosen(groupTargets))
 	}
-	if got := multi.keys(); len(got) != 1 || got[0] != "b" {
+	if got := multi.keys(groupTargets); len(got) != 1 || got[0] != "b" {
 		t.Errorf("the picker did not open on b: %v", got)
 	}
 	multi.move(-1)
 	multi.toggle()
-	if got := multi.chosen(); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+	if got := multi.chosen(groupTargets); len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Errorf("chosen keys are not in the picker's own order: %v", got)
 	}
 	multi.move(-1) // wraps to the end
@@ -1792,27 +1815,76 @@ func TestPickerKeeps(t *testing.T) {
 	multi.toggle() // a off again
 	multi.move(1)
 	multi.toggle() // b off
-	if !multi.empty() {
-		t.Errorf("un-choosing everything did not leave the picker empty: %v", multi.keys())
+	if _, empty := multi.emptyBand(); !empty {
+		t.Errorf("un-choosing everything did not leave the band empty: %v", multi.keys(groupTargets))
 	}
 
-	single := newPicker(options, []string{"a"}, false)
+	single := one([]string{"a"}, false)
 	single.move(2)
 	single.toggle()
-	if got := single.keys(); len(got) != 1 || got[0] != "c" {
-		t.Errorf("a single-choice picker took more than one: %v", got)
+	if got := single.keys(groupTargets); len(got) != 1 || got[0] != "c" {
+		t.Errorf("a single-choice band took more than one: %v", got)
 	}
 	single.toggle()
-	if single.empty() {
-		t.Error("a single-choice picker emptied itself")
+	if _, empty := single.emptyBand(); empty {
+		t.Error("a single-choice band emptied itself")
 	}
 
 	// An empty picker has no cursor to move and nothing to toggle.
 	var none picker
 	none.move(1)
 	none.toggle()
-	if !none.empty() || none.chosen() != nil {
+	if _, empty := none.emptyBand(); empty || none.chosen(groupTargets) != nil {
 		t.Error("an empty picker invented a choice")
+	}
+}
+
+// A picker's bands are independent, and everything about them is: what a band
+// opens on, whether it has been touched, and what it reports.
+//
+// Touched is per band because the two bands mean different things by "left
+// alone". An untouched targets band leaves the loadout's declaration and the
+// repository's evidence in charge; ticking a *skill* must not turn that into an
+// explicit list of agents, or narrowing a deployment would silently pin it to
+// whatever was detected that day. And the two namespaces overlap: a loadout may
+// carry a skill called "cursor", which must not open the Cursor agent ticked.
+func TestPickerBandsAnswerForThemselvesAlone(t *testing.T) {
+	p := newPicker(
+		band{ID: groupTargets, Title: "TARGETS", Noun: "target", Multi: true, Chosen: []string{"claude"},
+			Options: []choice{{Key: "claude", Label: "Claude Code"}, {Key: "cursor", Label: "Cursor"}}},
+		band{ID: groupSkills, Title: "SKILLS", Noun: "skill", Multi: true, Chosen: []string{"cursor", "react"},
+			Options: []choice{{Key: "cursor", Label: "cursor"}, {Key: "react", Label: "react"}}},
+	)
+
+	if got := p.keys(groupTargets); len(got) != 1 || got[0] != "claude" {
+		t.Fatalf("a skill named cursor ticked the Cursor agent: %v", got)
+	}
+	if got := p.keys(groupSkills); len(got) != 2 {
+		t.Fatalf("the skills band did not open on everything: %v", got)
+	}
+
+	// Untick a skill. The skills band now answers, and the targets band still
+	// does not.
+	p.cursor = 2
+	p.toggle()
+	if got := p.chosen(groupSkills); len(got) != 1 || got[0] != "react" {
+		t.Errorf("the skills band reported %v, want just react", got)
+	}
+	if got := p.chosen(groupTargets); got != nil {
+		t.Errorf("ticking a skill turned the untouched targets band into a choice: %v", got)
+	}
+
+	// Untick the last skill and the refusal names the band that is empty, not
+	// the other one.
+	p.cursor = 3
+	p.toggle()
+	g, empty := p.emptyBand()
+	if !empty || g.Noun != "skill" {
+		t.Errorf("an empty skills band reported %+v (empty=%v)", g, empty)
+	}
+	// A band nothing carries answers with nothing rather than with everything.
+	if got := p.keys("nosuchband"); got != nil {
+		t.Errorf("an unknown band answered with %v", got)
 	}
 }
 
@@ -1853,5 +1925,168 @@ func TestNoCardCutsItsOwnProseInHalf(t *testing.T) {
 	narrow.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
 	if got := narrow.cardText(); got != cardProse {
 		t.Errorf("a card has %d columns of text at 60 wide, but its prose is written for %d", got, cardProse)
+	}
+}
+
+// TestTheDeployCardHoldsTheFrameWithAVeryLongSkillList is the layout claim
+// asserted where it actually has to hold.
+//
+// The lab this feature was designed against uses a source carrying fifteen
+// hundred skills, and 80x24 is the smallest terminal the roster claims to work
+// on. A picker written for a short list grows the card past the screen, the
+// compositor's bounds are the union of its layers, and the terminal clips the
+// bottom - taking the one line that says how to leave the card. Asserting this
+// at a comfortable width proves nothing at all.
+func TestTheDeployCardHoldsTheFrameWithAVeryLongSkillList(t *testing.T) {
+	var skills []string
+	for i := 0; i < 1500; i++ {
+		skills = append(skills, fmt.Sprintf("skill-%04d-with-a-long-enough-name-to-wrap-a-narrow-card", i))
+	}
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", skills...)}}
+	cfg := withActions(cfgFor(r))
+
+	for _, size := range [][2]int{{80, 24}, {60, 20}, {80, 14}, {120, 40}} {
+		w, h := size[0], size[1]
+		for _, script := range [][]string{
+			{"s"},
+			// Down into the middle of the skills band, and to the very end.
+			append([]string{"s"}, repeat("j", 800)...),
+			{"s", "k"},
+		} {
+			got := plain(Frame(cfg, w, h, script...))
+			what := fmt.Sprintf("%dx%d after %d keys", w, h, len(script))
+			fits(t, got, w, h, what)
+			if !strings.Contains(got, "stand down") {
+				t.Errorf("%s: the card no longer says how to leave it:\n%s", what, got)
+			}
+			// Whatever it is showing, it says how much it is not showing. A
+			// picker silently offering eight of fifteen hundred reads as a unit
+			// with eight skills.
+			if !strings.Contains(got, "of 1505") {
+				t.Errorf("%s: the picker hid options without saying so:\n%s", what, got)
+			}
+			if !strings.Contains(got, "▸ [") {
+				t.Errorf("%s: the row the cursor is on is not on screen:\n%s", what, got)
+			}
+		}
+	}
+}
+
+func repeat(s string, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = s
+	}
+	return out
+}
+
+// The skills band is the loadout's own recorded skills, name-sorted and without
+// repeats, and it opens with every one of them ticked - because deploying the
+// whole unit is what a deploy is.
+func TestTheSkillsBandIsTheLoadoutsOwnSkills(t *testing.T) {
+	l := &loadout.Loadout{Name: "frontline", ID: "id-frontline"}
+	l.Equipment = []loadout.Equipment{
+		{Source: source.Source{Host: "github.com", Owner: "a", Repo: "one", Ref: "main"}, Commit: "c1", Skills: []string{"react", "css"}},
+		{Source: source.Source{Host: "github.com", Owner: "a", Repo: "two", Ref: "main"}, Commit: "c2", Skills: []string{"css", "armory"}},
+	}
+	if got := skillNames(l); !reflect.DeepEqual(got, []string{"armory", "css", "react"}) {
+		t.Fatalf("skillNames = %v", got)
+	}
+
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{l}}
+	d := &deployTracker{}
+	cfg := withMenus(cfgFor(r))
+	cfg.Deploy = d.deploy
+
+	card := plain(Frame(cfg, 100, 34, "s"))
+	if !strings.Contains(card, "SKILLS") {
+		t.Fatalf("the deploy card offers no skills band:\n%s", card)
+	}
+	for _, want := range []string{"[x] armory", "[x] css", "[x] react"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("the skills band did not open on %q:\n%s", want, card)
+		}
+	}
+
+	// Untouched is nil, which reaches the engine as no narrowing at all rather
+	// than as a hand-written list of everything.
+	Frame(cfg, 100, 34, "s", "y", "@pump")
+	if d.skills != nil {
+		t.Errorf("an untouched skills band narrowed the deployment to %v", d.skills)
+	}
+
+	// Ticking is the whole point: five targets come first, then armory, css,
+	// react - so eight presses of j lands on css.
+	Frame(cfg, 100, 34, append(append([]string{"s"}, repeat("j", 6)...), "space", "y", "@pump")...)
+	if !reflect.DeepEqual(d.skills, []string{"armory", "react"}) {
+		t.Errorf("unticking css gave the deploy %v", d.skills)
+	}
+
+	// And unticking a skill leaves the targets band untouched, so where the
+	// deploy goes is still barracks' own answer.
+	if d.targets != nil {
+		t.Errorf("choosing a skill overrode the target selection with %v", d.targets)
+	}
+}
+
+// A loadout whose definition records no skills gets no skills band at all,
+// rather than an empty one that could only ever refuse.
+func TestALoadoutWithNoRecordedSkillsOffersNoSkillsBand(t *testing.T) {
+	l := unitLoadout("frontline")
+	l.Equipment = []loadout.Equipment{{
+		Source: source.Source{Host: "github.com", Owner: "a", Repo: "one", Ref: "main"}, Commit: "c1",
+	}}
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{l}}
+	d := &deployTracker{}
+	cfg := withMenus(cfgFor(r))
+	cfg.Deploy = d.deploy
+
+	card := plain(Frame(cfg, 100, 34, "s"))
+	if strings.Contains(card, "SKILLS") {
+		t.Errorf("a loadout recording no skills was offered a skills band:\n%s", card)
+	}
+	Frame(cfg, 100, 34, "s", "y", "@pump")
+	if d.calls != 1 || d.skills != nil {
+		t.Errorf("the deploy ran %d times with skills %v", d.calls, d.skills)
+	}
+}
+
+// A partial deployment is distinguishable in the roster row and named in the
+// dossier, without either being derived from a display string.
+func TestAPartialDeploymentReadsDifferentlyFromAWholeOne(t *testing.T) {
+	whole := spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 3)
+	part := spawnedLease("siegeworks", "/repo/lab", "/repo/lab/.claude/skills", 1)
+	part.Selection = []string{"skill-0"}
+
+	r := fakeRecords{
+		root: "/repo/lab",
+		loadouts: []*loadout.Loadout{
+			unitLoadout("frontline", "skill-0", "skill-1", "skill-2"),
+			unitLoadout("siegeworks", "skill-0", "skill-1", "skill-2"),
+		},
+		leases: []*lease.Lease{whole, part},
+	}
+	st := gather(r)
+	for _, u := range st.Units {
+		want := "deployed"
+		if u.Loadout.Name == "siegeworks" {
+			want = "partial"
+		}
+		if got := u.Status(); got != want {
+			t.Errorf("%s posture = %q, want %q", u.Loadout.Name, got, want)
+		}
+	}
+
+	frame := plain(Frame(cfgFor(r), 110, 34, "j"))
+	for _, want := range []string{"◐ partial", "1 of 3 skills"} {
+		if !strings.Contains(frame, want) {
+			t.Errorf("the roster does not show %q for a partial deployment:\n%s", want, frame)
+		}
+	}
+	// The dossier names what is standing rather than making the user work it
+	// out from a count.
+	dossier := frame[strings.Index(frame, "DEPLOYMENTS"):]
+	if !strings.Contains(dossier, "skill-0") {
+		t.Errorf("the dossier does not name the standing skill:\n%s", dossier)
 	}
 }

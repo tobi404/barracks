@@ -191,8 +191,15 @@ func (e *Engine) planSpawn(ctx context.Context, l *lease.Lease, equipment []load
 	// rule has exactly one owner and the handoff above and the additions here
 	// can never attribute the same skill to different sources. By name, so the
 	// order is the same on every run and on every platform.
+	//
+	// A deployment narrowed at spawn time is narrowed here too, and this is the
+	// only place its selection is consulted: it gates additions exactly as
+	// provenance does, and for the same reason - to stop an upgrade materialising
+	// something this spawn was never made with. Every loop above is a relink or a
+	// removal over a path already proven ours, and none of them may ask, or a
+	// record would start deciding what gets deleted.
 	for _, name := range sortedKeys(provided) {
-		if recorded[name] {
+		if recorded[name] || !l.CarriesSkill(name) {
 			continue
 		}
 		mv := provided[name]

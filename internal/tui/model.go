@@ -271,9 +271,11 @@ func (m *model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 			// An order with nothing chosen is refused on the card that offered
 			// the choice, not in the status line the card is standing on: the
 			// user is looking at the picker, and a key that appears to do
-			// nothing is the failure this whole surface is held to.
-			if len(m.pick.options) > 0 && m.pick.empty() {
-				m.note = "Choose at least one, or stand the order down."
+			// nothing is the failure this whole surface is held to. Which band
+			// is empty is named, because "choose at least one" over a card
+			// holding both targets and skills does not say which.
+			if g, empty := m.pick.emptyBand(); empty {
+				m.note = fmt.Sprintf("Choose at least one %s, or stand the order down.", g.Noun)
 				return nil
 			}
 			return m.start(m.pending)
@@ -429,16 +431,22 @@ func (m *model) refuse(o order, u unit) string {
 // It refuses rather than returning a picker whenever the order cannot honestly
 // be offered - which today is a deploy whose loadout barracks cannot work out a
 // destination for at all.
+//
+// The skills band is built from the loadout definition the roster is already
+// holding, resolved here every time the card opens and kept nowhere. A
+// per-loadout memo of this is exactly what was deleted from this screen once
+// already: a tea.Cmd cleared it while Update read it, and holding a key down
+// killed the process with the terminal still in the alternate screen.
 func (m *model) pickerFor(o order, u unit) (picker, error) {
 	switch o {
 	case orderDeploy:
-		var options []choice
+		var targets []choice
 		for _, t := range m.cfg.Targets {
 			c := choice{Key: t.ID, Label: t.Display}
 			if t.Present {
 				c.Note = "present here"
 			}
-			options = append(options, c)
+			targets = append(targets, c)
 		}
 		var ids []string
 		if m.cfg.Selection != nil {
@@ -448,7 +456,19 @@ func (m *model) pickerFor(o order, u unit) (picker, error) {
 			}
 			ids = got
 		}
-		return newPicker(options, ids, true), nil
+		// Every skill opens ticked, because deploying the whole unit is what a
+		// deploy is. Untouched then reports nil, which reaches the engine as no
+		// narrowing at all rather than as a hand-written list of everything -
+		// the same distinction the targets band draws, for the same reason.
+		var skills []choice
+		names := skillNames(u.Loadout)
+		for _, n := range names {
+			skills = append(skills, choice{Key: n, Label: n})
+		}
+		return newPicker(
+			band{ID: groupTargets, Title: "TARGETS", Noun: "target", Multi: true, Options: targets, Chosen: ids},
+			band{ID: groupSkills, Title: "SKILLS", Noun: "skill", Multi: true, Options: skills, Chosen: names},
+		), nil
 	case orderLaunch:
 		var options []choice
 		for _, l := range m.cfg.Launchers {
@@ -458,7 +478,7 @@ func (m *model) pickerFor(o order, u unit) (picker, error) {
 		if len(options) > 0 {
 			first = []string{options[0].Key}
 		}
-		return newPicker(options, first, false), nil
+		return newPicker(band{ID: groupAgent, Title: "AGENT", Noun: "agent", Options: options, Chosen: first}), nil
 	}
 	return picker{}, nil
 }
@@ -482,7 +502,10 @@ func (m *model) start(o order) tea.Cmd {
 		m.stand("")
 		return nil
 	}
-	chosen := m.pick.chosen()
+	// Each band is asked for by name. Nil from either is "the user left this
+	// alone", which is not the same instruction as the same list chosen by hand.
+	chosen := m.pick.chosen(groupTargets)
+	skills := m.pick.chosen(groupSkills)
 	// Only a launch has a program, and only the launch picker's keys are
 	// programs. Asking for one on the way through every other order is what
 	// would let a deploy's ticked target be read as a choice of agent.
@@ -505,7 +528,7 @@ func (m *model) start(o order) tea.Cmd {
 		// see terminalJob for what that is guarding against. Everything it
 		// reports goes to the terminal it now owns, which is also where any
 		// prompt a child of it raises will be, and answerable.
-		return m.handover(func(s Session) Outcome { return cfg.Deploy(context.Background(), l, chosen, s) })
+		return m.handover(func(s Session) Outcome { return cfg.Deploy(context.Background(), l, chosen, skills, s) })
 	case orderGarrison:
 		// The committed tier fetches too, and writes real files into somebody's
 		// checkout, so it goes the same way for the same reason.
@@ -559,7 +582,7 @@ func (m *model) handover(run func(Session) Outcome) tea.Cmd {
 // that decides which program gets started is one filtering change away from
 // starting the wrong agent, silently, with somebody's skills already in place.
 func (m *model) launcher() Launcher {
-	for _, key := range m.pick.keys() {
+	for _, key := range m.pick.keys(groupAgent) {
 		for _, l := range m.cfg.Launchers {
 			if l.Command == key {
 				return l
