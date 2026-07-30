@@ -50,8 +50,10 @@ barracks equip frontend gh:owner/skills --only 'react-*,css-*'
 barracks equip frontend gh:owner/skills --except deprecated-helper
 ```
 
-`--only` and `--except` take glob patterns, so you can pull three skills out of a large
-repo rather than all of them.
+`--only` and `--except` take glob patterns, matching on a skill's name or its path inside
+its source, so you can pull three skills out of a large repo rather than all of them. A
+pattern that spells one of the source's skills exactly names that skill and is not read as
+a glob, so a skill really called `report[1]` can be selected by its own name.
 
 Equipping a source a loadout already has re-pins it to the newly resolved commit instead of
 attaching a second copy. A different `#ref` or subpath is a different source and is kept
@@ -154,9 +156,9 @@ happens.
 
 ### Sending part of a loadout
 
-`--only` and `--except` take the same glob patterns [`barracks equip`](#barracks-equip-loadout-source)
-takes, matching on a skill's name or its path inside its source. The difference is
-persistence, and it is the whole point of them:
+`--only` and `--except` take the same patterns [`barracks equip`](#barracks-equip-loadout-source)
+takes and match the same way. The difference is persistence, and it is the whole point of
+them:
 
 | | Where it lives | How long it lasts |
 |---|---|---|
