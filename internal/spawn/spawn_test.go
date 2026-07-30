@@ -68,10 +68,10 @@ func newScene(t *testing.T, skills ...testutil.Skill) *scene {
 	return s
 }
 
-// loadout builds a loadout equipped with the fixture repo.
-func (s *scene) loadout(t *testing.T, name, subpath string, only, except []string) *loadout.Loadout {
+// equipment pins one fixture repo as a source.
+func (s *scene) equipment(t *testing.T, repo *testutil.GitRepo, subpath string, only, except []string) loadout.Equipment {
 	t.Helper()
-	raw := s.src.Dir
+	raw := repo.Dir
 	if subpath != "" {
 		raw += "#main:" + subpath
 	}
@@ -83,10 +83,16 @@ func (s *scene) loadout(t *testing.T, name, subpath string, only, except []strin
 	if err != nil {
 		t.Fatal(err)
 	}
+	return loadout.Equipment{Source: src, Commit: commit, Only: only, Except: except}
+}
+
+// loadout builds a loadout equipped with the fixture repo.
+func (s *scene) loadout(t *testing.T, name, subpath string, only, except []string) *loadout.Loadout {
+	t.Helper()
 	return &loadout.Loadout{
 		Name:      name,
 		CreatedAt: fixedNow,
-		Equipment: []loadout.Equipment{{Source: src, Commit: commit, Only: only, Except: except}},
+		Equipment: []loadout.Equipment{s.equipment(t, s.src, subpath, only, except)},
 	}
 }
 
@@ -917,6 +923,50 @@ func TestTwoDeploymentsOfOneLoadoutCarryDifferentSelections(t *testing.T) {
 	}
 	if !reflect.DeepEqual(b.Lease.Selection, []string{"css"}) {
 		t.Errorf("the second deployment recorded %v", b.Lease.Selection)
+	}
+}
+
+// A selection is applied before the collision check, so a deployment may name
+// its way past a clash the definition has - and in exactly that case a skill
+// name two sources provide is one choice the user had, not two. Counting it
+// twice would say three skills were left behind where two were, and list the
+// same name twice in a refusal, which reads as barracks having lost the loadout
+// rather than as a filter that missed.
+func TestASkillTwoSourcesProvideCountsOnceAmongWhatWasOffered(t *testing.T) {
+	s := newScene(t, testutil.Skill{Path: "skills/css"}, testutil.Skill{Path: "skills/react"})
+	second := testutil.NewSkillRepo(t, filepath.Join(s.root, "src2"),
+		testutil.Skill{Path: "skills/css"}, testutil.Skill{Path: "skills/vue"})
+
+	l := s.loadout(t, "frontend", "skills", nil, nil)
+	l.Equipment = append(l.Equipment, s.equipment(t, second, "skills", nil, nil))
+
+	req := s.request(l)
+	req.Skills = skill.Selection{Only: []string{"react"}}
+	res, err := s.engine.Spawn(ctx(), req)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got := names(res.Skills); !reflect.DeepEqual(got, []string{"react"}) {
+		t.Fatalf("the spawn placed %v, want react alone", got)
+	}
+	if res.Skipped != 2 {
+		t.Errorf("the spawn reported %d skills left behind, want 2 (css and vue)", res.Skipped)
+	}
+
+	// And the refusal names each distinct skill once.
+	other := testutil.NewGitRepo(t, filepath.Join(s.root, "other"))
+	testutil.WriteFile(t, filepath.Join(other.Dir, "README.md"), "hello\n")
+	other.Commit(t, "initial")
+	miss := s.request(l)
+	miss.Cwd = other.Dir
+	miss.Skills = skill.Selection{Only: []string{"no-such-skill"}}
+
+	_, err = s.engine.Spawn(ctx(), miss)
+	if !errors.Is(err, ErrNothingSelected) {
+		t.Fatalf("Spawn err = %v, want ErrNothingSelected", err)
+	}
+	if !strings.Contains(err.Error(), "the 3 skills frontend carries: css, react, vue") {
+		t.Errorf("the refusal counted or listed a skill twice: %v", err)
 	}
 }
 

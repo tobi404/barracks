@@ -129,10 +129,10 @@ func (s Selection) Apply(skills []Skill) ([]Skill, error) {
 // Patterns match either the skill name or its source-relative path, so both
 // "react" and "skills/react" select the same skill.
 func Filter(skills []Skill, only, except []string) ([]Skill, error) {
-	if err := validatePatterns(append(append([]string{}, only...), except...)); err != nil {
+	literal := literalPatterns(skills, only, except)
+	if err := validatePatterns(literal, only, except); err != nil {
 		return nil, err
 	}
-	literal := literalPatterns(skills, only, except)
 	out := make([]Skill, 0, len(skills))
 	for _, s := range skills {
 		if len(only) > 0 && !matchAny(only, s, literal) {
@@ -193,10 +193,23 @@ func matchAny(patterns []string, s Skill, literal map[string]bool) bool {
 	return false
 }
 
-func validatePatterns(patterns []string) error {
-	for _, p := range patterns {
-		if _, err := path.Match(p, ""); err != nil {
-			return fmt.Errorf("bad pattern %q: %w", p, err)
+// validatePatterns rejects a malformed glob, skipping the patterns that spell a
+// discovered skill exactly.
+//
+// A literal is never handed to path.Match, so its syntax is not a question that
+// can be asked of it: `report[1` is a legal directory name and an illegal glob,
+// and validating it as one would refuse the very deployment the literal rule
+// exists to make possible. A malformed pattern that names no discovered skill
+// is still a typo, and still reported.
+func validatePatterns(literal map[string]bool, sets ...[]string) error {
+	for _, set := range sets {
+		for _, p := range set {
+			if literal[p] {
+				continue
+			}
+			if _, err := path.Match(p, ""); err != nil {
+				return fmt.Errorf("bad pattern %q: %w", p, err)
+			}
 		}
 	}
 	return nil

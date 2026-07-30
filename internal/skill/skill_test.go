@@ -217,6 +217,7 @@ func TestALiteralNameSelectsItselfWhateverItIsCalled(t *testing.T) {
 		{Name: "report[1]", RelPath: "skills/report[1]"},
 		{Name: "report1", RelPath: "skills/report1"},
 		{Name: "react", RelPath: "skills/react"},
+		{Name: "report[1", RelPath: "skills/report[1"},
 	}
 
 	got, err := Filter(skills, []string{"report[1]"}, nil)
@@ -233,13 +234,32 @@ func TestALiteralNameSelectsItselfWhateverItIsCalled(t *testing.T) {
 		t.Errorf("the path spelling selected %v", Names(got))
 	}
 	got, _ = Filter(skills, []string{"re*"}, nil)
-	if len(got) != 3 {
+	if len(got) != 4 {
 		t.Errorf("a glob stopped matching: %v", Names(got))
 	}
 	// And a literal name still excludes exactly itself.
 	got, _ = Filter(skills, nil, []string{"report[1]"})
-	if !reflect.DeepEqual(Names(got), []string{"report1", "react"}) {
+	if !reflect.DeepEqual(Names(got), []string{"report1", "react", "report[1"}) {
 		t.Errorf("--except 'report[1]' left %v", Names(got))
+	}
+
+	// A name that is not a legal glob at all is the case the whole rule exists
+	// for: `report[1` is a directory somebody can create and a syntax error
+	// path.Match refuses to answer for. The literal test has to be reached
+	// before validation, or the picker's own name would be rejected as a typo.
+	got, err = Filter(skills, []string{"report[1"}, nil)
+	if err != nil {
+		t.Fatalf("--only 'report[1' was rejected: %v", err)
+	}
+	if !reflect.DeepEqual(Names(got), []string{"report[1"}) {
+		t.Errorf("--only 'report[1' selected %v, want the directory of that name", Names(got))
+	}
+	got, err = Filter(skills, nil, []string{"report[1"})
+	if err != nil {
+		t.Fatalf("--except 'report[1' was rejected: %v", err)
+	}
+	if !reflect.DeepEqual(Names(got), []string{"report[1]", "report1", "react"}) {
+		t.Errorf("--except 'report[1' left %v", Names(got))
 	}
 }
 

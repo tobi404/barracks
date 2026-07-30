@@ -149,10 +149,15 @@ func (e *Engine) Resolve(ctx context.Context, req Request) (Location, error) {
 // Plan is the set of skills a loadout would place, resolved against the store.
 type Plan struct {
 	Skills []Placed
-	// Available is every skill the loadout offers at its pinned commits, before
-	// this deployment's own selection narrowed it. It is what lets a selection
-	// that matched nothing say what there was to choose from instead of sending
-	// the user off to equip a source they already have.
+	// Available is every distinct skill the loadout offers at its pinned
+	// commits, before this deployment's own selection narrowed it. It is what
+	// lets a selection that matched nothing say what there was to choose from
+	// instead of sending the user off to equip a source they already have.
+	//
+	// It is a set of names rather than a tally of what each source contributed,
+	// because both readers are counting skills the user can name: a selection is
+	// applied before the collision check, so a name two sources provide is one
+	// choice, and reporting it twice reads as barracks having lost count.
 	Available []string
 	Fetched   int
 }
@@ -167,6 +172,7 @@ type Plan struct {
 func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string, sel skill.Selection) (Plan, error) {
 	var plan Plan
 	seen := map[string]string{}
+	available := map[string]bool{}
 
 	for _, eq := range l.Equipment {
 		if eq.Commit == "" {
@@ -187,7 +193,9 @@ func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string
 		if err != nil {
 			return Plan{}, err
 		}
-		plan.Available = append(plan.Available, skill.Names(found)...)
+		for _, name := range skill.Names(found) {
+			available[name] = true
+		}
 
 		selected, err := sel.Apply(found)
 		if err != nil {
@@ -205,6 +213,9 @@ func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string
 				Source: eq.Ident(),
 			})
 		}
+	}
+	for name := range available {
+		plan.Available = append(plan.Available, name)
 	}
 	sort.Strings(plan.Available)
 	sort.Slice(plan.Skills, func(i, j int) bool { return plan.Skills[i].Name < plan.Skills[j].Name })
