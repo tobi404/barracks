@@ -152,13 +152,18 @@ func (m *model) prompted(msg promptedMsg) tea.Cmd {
 		m.note = strings.Join(append([]string{msg.out.Err.Error()}, prefixed("! ", msg.out.Notices)...), "\n")
 		return m.input.Focus()
 	}
-	switch msg.order {
-	case orderTrain:
+	switch {
+	case msg.order == orderTrain && len(msg.out.Notices) == 0:
 		// The new unit is where the cursor goes, because the next thing a
 		// loadout with nothing in it needs is the order that fills it.
 		m.stand(fmt.Sprintf("Trained %s. Press e to equip it.", msg.name))
 		m.follow = msg.name
 	default:
+		// An equip's report, or a train that had something to say beyond
+		// having worked: a notice is never left behind in a status line.
+		if msg.order == orderTrain {
+			m.follow = msg.name
+		}
 		m.pending = orderNone
 		m.result = msg.out
 		m.scr = screenOutcome

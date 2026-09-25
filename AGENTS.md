@@ -516,7 +516,7 @@ deliberate decision, not a refactor.
   `cli.Env.reportTo` keeps `Live: false` for the same reason it always had it, now sharper:
   nothing barracks writes may erase a prompt it did not raise. Every order that fetches or
   starts a child goes through the one `terminalJob` - deploy, garrison, both halves of an
-  upgrade, and run - and `tui.Session` is why it carries all three streams rather than one
+  upgrade, equip, and run - and `tui.Session` is why it carries all three streams rather than one
   writer: an agent that cannot read the keyboard is not an agent. Proved by hand on a real
   pty, not only in the suite: a fake `ssh` prompting for a key passphrase on `/dev/tty`
   during a roster garrison and during an upgrade's resolve, visible and answerable both

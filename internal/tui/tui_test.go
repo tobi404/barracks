@@ -2153,7 +2153,7 @@ func TestNoCardCutsItsOwnProseInHalf(t *testing.T) {
 	cfg := withActions(cfgFor(r))
 
 	for _, w := range []int{60, 80, 100} {
-		for _, script := range [][]string{{"s"}, {"r"}, {"g"}, {"L"}, {"r", "g"}} {
+		for _, script := range [][]string{{"s"}, {"r"}, {"g"}, {"L"}, {"r", "g"}, {"n"}, {"e"}} {
 			frame := plain(Frame(cfg, w, 34, script...))
 			for _, line := range strings.Split(frame, "\n") {
 				if !strings.ContainsRune(line, '║') {

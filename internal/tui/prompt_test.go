@@ -361,3 +361,27 @@ func TestTheOrdersOverlayNamesNewAndEquipAndKeepsItsEdge(t *testing.T) {
 		}
 	}
 }
+
+// A train that worked but had something to say goes to the outcome card rather
+// than the status line, because a notice is a thing barracks declined to do and
+// a status line is gone at the next key. The cursor still lands on the unit.
+func TestATrainWithANoticeIsNotReducedToAStatusLine(t *testing.T) {
+	noisy := func() Config {
+		cfg := newDesk(unitLoadout("alpha", "a")).config()
+		train := cfg.Train
+		cfg.Train = func(ctx context.Context, name string) Outcome {
+			out := train(ctx, name)
+			out.Notices = []string{"declared target \"vim\" is not one barracks knows"}
+			return out
+		}
+		return cfg
+	}
+
+	got := plain(Frame(noisy(), 100, 24, "n", "@type:charlie", "enter", "@pump"))
+	if !strings.Contains(got, "CHARLIE TRAINED") || !strings.Contains(got, "not one barracks knows") {
+		t.Errorf("a train's notice was not shown on the outcome card:\n%s", got)
+	}
+	if back := plain(Frame(noisy(), 100, 24, "n", "@type:charlie", "enter", "@pump", "x")); !strings.Contains(back, "▸ charlie") {
+		t.Errorf("the cursor did not land on the unit trained:\n%s", back)
+	}
+}
