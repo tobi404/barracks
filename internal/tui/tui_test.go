@@ -1013,8 +1013,21 @@ func TestNothingInterruptsWorkUnderway(t *testing.T) {
 func TestRefreshRereadsTheRecords(t *testing.T) {
 	r := fakeRecords{root: "/repo", loadouts: []*loadout.Loadout{unitLoadout("alpha")}}
 	got := plain(Frame(cfgFor(r), 100, 24, "R", "@pump"))
-	if !strings.Contains(got, "Mustering") || !strings.Contains(got, "alpha") {
+	if !strings.Contains(got, "Mustered 1 unit.") || strings.Contains(got, "Mustering") || !strings.Contains(got, "alpha") {
 		t.Errorf("R did not re-muster:\n%s", got)
+	}
+}
+
+// Every finished order re-reads the records too, but only R is a muster: the
+// status line must not announce one the user never asked for.
+func TestOnlyRAnnouncesAMuster(t *testing.T) {
+	r := fakeRecords{root: "/repo/lab", leases: []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 1)},
+		loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
+	cfg := cfgFor(r)
+	cfg.Recall = func(context.Context, *loadout.Loadout) Outcome { return Outcome{Title: "frontline recalled"} }
+	got := plain(Frame(cfg, 110, 30, "r", "y", "@pump", "esc"))
+	if strings.Contains(got, "FRONTLINE RECALLED") || strings.Contains(got, "Mustered") {
+		t.Errorf("an order's re-read announced a muster:\n%s", got)
 	}
 }
 
@@ -1027,6 +1040,32 @@ func TestBackgroundColourPicksThePalette(t *testing.T) {
 	m.Update(tea.BackgroundColorMsg{Color: lightWhite{}})
 	if m.th.brass == darkBrass {
 		t.Error("a light terminal did not change the palette")
+	}
+}
+
+// The dossier is rendered into the viewport before the terminal answers, so
+// the answer has to re-render it or it stays in the dark palette.
+func TestALightAnswerRerendersTheDossier(t *testing.T) {
+	r := fakeRecords{root: "/repo", loadouts: []*loadout.Loadout{unitLoadout("alpha", "a")}}
+	m := newModel(Config{Records: r})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m.Update(tea.BackgroundColorMsg{Color: lightWhite{}})
+	light := false
+	want := newModel(Config{Records: r, Dark: &light})
+	want.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	if m.vp.View() != want.vp.View() {
+		t.Error("the dossier kept the dark palette after a light answer")
+	}
+}
+
+func TestHelpFollowsTheTheme(t *testing.T) {
+	m := newModel(Config{Records: fakeRecords{root: "/repo"}})
+	if m.help.Styles.ShortKey.GetForeground() != m.th.steel || m.help.Styles.ShortDesc.GetForeground() != m.th.dim {
+		t.Error("the key bar does not use the roster's palette")
+	}
+	m.Update(tea.BackgroundColorMsg{Color: lightWhite{}})
+	if m.help.Styles.ShortKey.GetForeground() != m.th.steel || m.help.Styles.FullDesc.GetForeground() != m.th.dim {
+		t.Error("the key bar kept the dark palette after a light answer")
 	}
 }
 
