@@ -491,6 +491,46 @@ func TestRosterRecallsWhatItDeployed(t *testing.T) {
 	}
 }
 
+// TestRosterRemovesAGarrisonByName is the typed card reaching the real
+// committed tier: the same lockfile matching and the same removal `barracks
+// recall` uses, the files gone and barracks.lock rewritten - and a single key
+// press on the recall card before it still leaves every file in place.
+func TestRosterRemovesAGarrisonByName(t *testing.T) {
+	h := newHarness(t)
+	h.equipped("frontline", "--except", "legacy")
+	h.mustRun("garrison", "frontline", "--target", "claude")
+	h.mustRun("spawn", "frontline", "--target", "cursor")
+	react := h.garrisonPath(".claude/skills/react/SKILL.md")
+
+	got := h.frame(120, 32, "r", "y", "@pump")
+	if !strings.Contains(got, "FRONTLINE RECALLED") {
+		t.Fatalf("the spawn recall never happened:\n%s", got)
+	}
+	if !testutil.Exists(react) {
+		t.Fatal("a single key on the recall card removed committed files")
+	}
+
+	// The spawn is gone now, so r goes straight to the typed card.
+	got = h.frame(120, 32, "r", "@type:frontlin", "enter", "@pump")
+	if !strings.Contains(got, "That is not the name") || !testutil.Exists(react) {
+		t.Fatalf("a wrong name was not refused, or removed files anyway:\n%s", got)
+	}
+
+	got = h.frame(120, 32, "r", "@type:frontline", "enter", "@pump")
+	// The whole line, lockfile clause included: it is the committed-tier fact
+	// the card exists to report, and a card is narrower than the command's
+	// own sentence.
+	if !strings.Contains(got, "garrison  2 files removed, barracks.lock updated") {
+		t.Errorf("the removal was not reported in full:\n%s", got)
+	}
+	if testutil.Exists(react) {
+		t.Error("the roster reported a garrison removal that did not happen")
+	}
+	if out := h.mustRun("deployed"); strings.Contains(out, "frontline") {
+		t.Errorf("barracks.lock still records the garrison:\n%s", out)
+	}
+}
+
 // The outcome card counts what an order moved, and a count of one is not
 // "1 skills".
 //

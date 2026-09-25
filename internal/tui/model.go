@@ -18,6 +18,10 @@ type screen int
 const (
 	screenRoster screen = iota
 	screenConfirm
+	// screenTyped is the card that will not take a single key for an answer:
+	// removing a garrison deletes tracked files from somebody's checkout, so it
+	// is confirmed by typing the loadout's name out in full.
+	screenTyped
 	screenWorking
 	screenPreview
 	screenOutcome
@@ -34,6 +38,10 @@ const (
 	orderGarrison
 	orderUpgrade
 	orderLaunch
+	// orderRemoveGarrison is a recall that reaches the committed tier too:
+	// `barracks recall <loadout>`, garrison and all. It is only ever given from
+	// the typed card.
+	orderRemoveGarrison
 )
 
 func (o order) verb() string {
@@ -48,6 +56,8 @@ func (o order) verb() string {
 		return "Upgrade"
 	case orderLaunch:
 		return "Launch"
+	case orderRemoveGarrison:
+		return "Remove"
 	default:
 		return ""
 	}
@@ -65,6 +75,8 @@ func (o order) working() string {
 		return "SCOUTING AHEAD"
 	case orderRecall:
 		return "STANDING DOWN"
+	case orderRemoveGarrison:
+		return "BREAKING CAMP"
 	default:
 		return "MOVING OUT"
 	}
@@ -96,7 +108,9 @@ type model struct {
 	// note is what the card in front has to say for itself - a refusal raised
 	// by the card's own keys, which belongs on the card rather than in a status
 	// line the card may well be covering.
-	note   string
+	note string
+	// typed is what has been typed on the typed card so far.
+	typed  string
 	result Outcome
 	// apply carries out the plan the preview card is showing. Non-nil is
 	// exactly what puts that card in front of the user, so a plan can never be
@@ -274,6 +288,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m, m.onKey(msg)
+
+	case tea.PasteMsg:
+		// A pasted name is as good as a typed one - it is still the name, spelled
+		// out, and not a key brushed by accident. Anywhere else a paste means
+		// nothing and is dropped rather than handed to the dossier.
+		if m.scr == screenTyped {
+			m.typed += strings.TrimSpace(msg.Content)
+			m.note = ""
+		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -299,6 +323,13 @@ func (m *model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.start(m.pending)
 		case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Quit):
 			m.stand("Order withdrawn.")
+		case m.pending == orderRecall && key.Matches(msg, m.keys.Garrison):
+			// The way on to the garrison, from the recall card that says the
+			// garrison stays. Only a unit with a garrison here is offered it, and
+			// the card names the key only then.
+			if u, ok := m.selected(); ok && u.Committed != nil {
+				m.askForName()
+			}
 		case key.Matches(msg, m.keys.Choose):
 			m.pick.toggle()
 			m.note = ""
@@ -310,6 +341,9 @@ func (m *model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.note = ""
 		}
 		return nil
+
+	case screenTyped:
+		return m.onTyped(msg)
 
 	case screenWorking:
 		// Nothing interrupts work already underway. A half-applied spawn is the
@@ -373,8 +407,48 @@ func (m *model) stand(status string) {
 	m.scr, m.pending = screenRoster, orderNone
 	m.pick = picker{}
 	m.into = ""
-	m.note = ""
+	m.note, m.typed = "", ""
 	m.status = status
+}
+
+// askForName puts the typed card in front: a recall that removes the garrison
+// too, confirmed by the loadout's name and nothing shorter.
+func (m *model) askForName() {
+	m.pending = orderRemoveGarrison
+	m.pick = picker{}
+	m.note, m.typed, m.status = "", "", ""
+	m.scr = screenTyped
+}
+
+// onTyped is the typed card's keys. Every printable key is text here - `y`,
+// `n`, `q`, `j` and `k` included - because a loadout called "sync" must not
+// confirm itself on its third letter, nor one called "norse" stand itself down
+// on its first. Only enter answers, only esc and ctrl+c leave.
+func (m *model) onTyped(msg tea.KeyPressMsg) tea.Cmd {
+	u, ok := m.selected()
+	if !ok {
+		m.stand("")
+		return nil
+	}
+	switch {
+	case msg.Code == tea.KeyEnter:
+		if m.typed != u.Loadout.Name {
+			m.note = "That is not the name. Type it exactly."
+			return nil
+		}
+		return m.start(orderRemoveGarrison)
+	case msg.Code == tea.KeyEscape, msg.Code == 'c' && msg.Mod == tea.ModCtrl:
+		m.stand("Order withdrawn.")
+	case msg.Code == tea.KeyBackspace:
+		if r := []rune(m.typed); len(r) > 0 {
+			m.typed = string(r[:len(r)-1])
+		}
+		m.note = ""
+	case msg.Text != "":
+		m.typed += msg.Text
+		m.note = ""
+	}
+	return nil
 }
 
 // propose puts an order in front of the user rather than carrying it out. Every
@@ -416,6 +490,12 @@ func (m *model) propose(o order) tea.Cmd {
 	if o == orderUpgrade {
 		return m.start(o)
 	}
+	if o == orderRecall && len(u.Here) == 0 {
+		// Nothing but a garrison is standing here, so there is no single-key
+		// recall to offer: the typed card is the whole order.
+		m.askForName()
+		return nil
+	}
 	m.pending = o
 	m.scr = screenConfirm
 	m.status = ""
@@ -437,7 +517,7 @@ func (m *model) refuse(o order, u unit) string {
 	}
 	switch o {
 	case orderRecall:
-		if len(u.Here) == 0 {
+		if len(u.Here) == 0 && u.Committed == nil {
 			return fmt.Sprintf("%s is not deployed here.", u.Loadout.Name)
 		}
 	case orderLaunch:
@@ -548,7 +628,7 @@ func (m *model) refused(err error) {
 	m.pending, m.working = orderNone, orderNone
 	m.pick = picker{}
 	m.into = ""
-	m.note, m.status = "", ""
+	m.note, m.status, m.typed = "", "", ""
 	m.apply = nil
 	m.result = Outcome{Err: err}
 	m.scr = screenOutcome
@@ -575,7 +655,7 @@ func (m *model) start(o order) tea.Cmd {
 	m.pending = orderNone
 	m.pick = picker{}
 	m.into = ""
-	m.note = ""
+	m.note, m.typed = "", ""
 	m.working = o
 	m.scr = screenWorking
 	m.status = ""
@@ -606,7 +686,11 @@ func (m *model) start(o order) tea.Cmd {
 	case orderRecall:
 		// A recall reads records and removes symlinks. It starts no child, so
 		// it keeps the screen and the roster keeps drawing.
-		return func() tea.Msg { return doneMsg{Preview{Outcome: cfg.Recall(context.Background(), l)}} }
+		return func() tea.Msg { return doneMsg{Preview{Outcome: cfg.Recall(context.Background(), l, false)}} }
+	case orderRemoveGarrison:
+		// Removing committed files fetches nothing and starts no child either;
+		// it is the same recall, reaching the committed tier as well.
+		return func() tea.Msg { return doneMsg{Preview{Outcome: cfg.Recall(context.Background(), l, true)}} }
 	}
 	return func() tea.Msg { return doneMsg{Preview{Outcome: Outcome{Title: "nothing to do"}}} }
 }

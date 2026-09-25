@@ -122,7 +122,7 @@ func withMenus(cfg Config) Config {
 func withActions(cfg Config) Config {
 	cfg = withMenus(cfg)
 	cfg.Deploy = (&deployTracker{}).deploy
-	cfg.Recall = func(context.Context, *loadout.Loadout) Outcome { return Outcome{Title: "recalled"} }
+	cfg.Recall = func(context.Context, *loadout.Loadout, bool) Outcome { return Outcome{Title: "recalled"} }
 	cfg.Garrison = func(_ context.Context, l *loadout.Loadout, _ Session) Outcome {
 		return Outcome{Title: l.Name + " garrisoned"}
 	}
@@ -982,7 +982,7 @@ func TestOutcomeShowsRefusalsAndNotices(t *testing.T) {
 func TestRecallOnlyOffersItselfWhereSomethingIsDeployed(t *testing.T) {
 	idle := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
 	cfg := cfgFor(idle)
-	cfg.Recall = func(context.Context, *loadout.Loadout) Outcome { return Outcome{Title: "frontline recalled"} }
+	cfg.Recall = func(context.Context, *loadout.Loadout, bool) Outcome { return Outcome{Title: "frontline recalled"} }
 	if got := plain(Frame(cfg, 110, 30, "r")); !strings.Contains(got, "is not deployed here") {
 		t.Errorf("recalling an idle unit said nothing:\n%s", got)
 	}
@@ -1024,7 +1024,7 @@ func TestOnlyRAnnouncesAMuster(t *testing.T) {
 	r := fakeRecords{root: "/repo/lab", leases: []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 1)},
 		loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
 	cfg := cfgFor(r)
-	cfg.Recall = func(context.Context, *loadout.Loadout) Outcome { return Outcome{Title: "frontline recalled"} }
+	cfg.Recall = func(context.Context, *loadout.Loadout, bool) Outcome { return Outcome{Title: "frontline recalled"} }
 	got := plain(Frame(cfg, 110, 30, "r", "y", "@pump", "esc"))
 	if strings.Contains(got, "FRONTLINE RECALLED") || strings.Contains(got, "Mustered") {
 		t.Errorf("an order's re-read announced a muster:\n%s", got)
@@ -1721,28 +1721,202 @@ func TestLaunchSaysSoWhenThereIsNothingToStart(t *testing.T) {
 	}
 }
 
-// Recall from the roster covers the personal tier only, and the card says so.
-//
-// The garrison order sits one key away from it, so a recall card that said
-// nothing would read as "this removes the loadout" - which for a unit that is
-// both committed and spawned here would be wrong in the direction that costs
-// somebody an afternoon looking for files that never went anywhere.
-func TestTheRecallCardSaysItLeavesTheCommittedTierAlone(t *testing.T) {
+// garrisonHere is a garrison of name in the lab, recording files files.
+func garrisonHere(name string, files int) garrison.Garrison {
+	g := garrison.Garrison{Loadout: name, ID: "id-" + name, Targets: []string{"claude"}}
+	sk := garrison.Skill{Name: "a", Target: "claude", Dir: ".claude/skills/a"}
+	for i := 0; i < files; i++ {
+		sk.Files = append(sk.Files, garrison.File{Path: fmt.Sprintf("f%d.md", i)})
+	}
+	g.Skills = []garrison.Skill{sk}
+	return g
+}
+
+// recallTracker records every recall the roster asked for, and whether each
+// was to reach the committed tier.
+type recallTracker struct{ calls []bool }
+
+func (r *recallTracker) recall(_ context.Context, l *loadout.Loadout, committed bool) Outcome {
+	r.calls = append(r.calls, committed)
+	return Outcome{Title: l.Name + " recalled"}
+}
+
+// Recall from the roster is the personal tier behind one key, and the garrison
+// behind the typed card - and where a garrison stands beside the spawns, the
+// recall card says which is which rather than sending anyone to the shell.
+func TestTheRecallCardOffersTheGarrisonOnlyByName(t *testing.T) {
 	r := fakeRecords{
 		root:      "/repo/lab",
 		loadouts:  []*loadout.Loadout{unitLoadout("frontline", "a")},
 		leases:    []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 1)},
-		garrisons: []garrison.Garrison{{Loadout: "frontline", ID: "id-frontline", Targets: []string{"claude"}}},
+		garrisons: []garrison.Garrison{garrisonHere("frontline", 12)},
 	}
-	got := plain(Frame(withActions(cfgFor(r)), 100, 30, "r"))
+	rec := &recallTracker{}
+	cfg := withActions(cfgFor(r))
+	cfg.Recall = rec.recall
+
+	got := plain(Frame(cfg, 100, 30, "r"))
 	if !strings.Contains(got, "RECALL ORDER") {
 		t.Fatalf("r did not raise a recall order:\n%s", got)
 	}
-	if !strings.Contains(got, "Spawns only") {
-		t.Errorf("the recall card does not say the garrison stays:\n%s", got)
+	for _, want := range []string{"Spawns only - the garrison stays.", "g garrison too"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the recall card does not say %q:\n%s", want, got)
+		}
 	}
-	if !strings.Contains(got, "barracks recall frontline") {
-		t.Errorf("the recall card does not name what removes the garrison:\n%s", got)
+	if strings.Contains(got, "barracks recall") {
+		t.Errorf("the recall card still sends the user to the shell:\n%s", got)
+	}
+
+	// y is the spawns alone.
+	Frame(cfg, 100, 30, "r", "y", "@pump")
+	if len(rec.calls) != 1 || rec.calls[0] {
+		t.Fatalf("y on the recall card should recall the spawns only, got %v", rec.calls)
+	}
+
+	// g opens the typed card, which states what goes.
+	got = plain(Frame(cfg, 100, 30, "r", "g"))
+	for _, want := range []string{"REMOVE GARRISON", "Type frontline to remove 12 committed files", "rewrite", "barracks.lock.", "Recalls its 1 live spawn here too.", "esc stand down"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the typed card does not say %q:\n%s", want, got)
+		}
+	}
+}
+
+// A unit with no garrison hears nothing about one, and g on its recall card
+// does nothing: the card names no such key.
+func TestTheRecallCardSaysNothingOfAGarrisonThatIsNotThere(t *testing.T) {
+	r := fakeRecords{
+		root:     "/repo/lab",
+		loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")},
+		leases:   []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 1)},
+	}
+	got := cardOnly(plain(Frame(withActions(cfgFor(r)), 100, 30, "r")))
+	for _, unwanted := range []string{"garrison", "barracks recall"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("the recall card of an ungarrisoned unit mentions %q:\n%s", unwanted, got)
+		}
+	}
+	if got := plain(Frame(withActions(cfgFor(r)), 100, 30, "r", "g")); strings.Contains(got, "REMOVE GARRISON") {
+		t.Errorf("g opened a garrison removal for a unit with no garrison:\n%s", got)
+	}
+}
+
+// cardOnly is the rows of a frame the card in front is drawn on, so an
+// assertion about the card is not answered by the footer behind it.
+func cardOnly(frame string) string {
+	var rows []string
+	for _, line := range strings.Split(frame, "\n") {
+		if strings.ContainsRune(line, '║') {
+			rows = append(rows, line)
+		}
+	}
+	return strings.Join(rows, "\n")
+}
+
+// The garrison is removed only by its loadout's name, typed out in full. The
+// roster refused this outright before; the typed card is the one way to it.
+func TestAGarrisonIsRemovedOnlyByTypingItsName(t *testing.T) {
+	r := fakeRecords{
+		root:      "/repo/lab",
+		loadouts:  []*loadout.Loadout{unitLoadout("frontline", "a")},
+		garrisons: []garrison.Garrison{garrisonHere("frontline", 3)},
+	}
+	run := func(script ...string) (*recallTracker, string) {
+		rec := &recallTracker{}
+		cfg := withActions(cfgFor(r))
+		cfg.Recall = rec.recall
+		return rec, plain(Frame(cfg, 100, 30, script...))
+	}
+
+	// With nothing but a garrison here, r goes straight to the typed card.
+	if _, got := run("r"); !strings.Contains(got, "REMOVE GARRISON") || !strings.Contains(got, "Type frontline to remove 3 committed files") {
+		t.Fatalf("r on a garrisoned unit did not open the typed card:\n%s", got)
+	} else if strings.Contains(got, "live spawn") {
+		t.Errorf("the typed card counts spawns that are not there:\n%s", got)
+	}
+
+	// Wrong name: refused on the card, nothing removed.
+	rec, got := run("r", "@type:frontlin", "enter", "@pump")
+	if len(rec.calls) != 0 {
+		t.Errorf("a wrong name removed the garrison: %v", rec.calls)
+	}
+	if !strings.Contains(got, "That is not the name") || !strings.Contains(got, "REMOVE GARRISON") {
+		t.Errorf("a wrong name was not refused on the card:\n%s", got)
+	}
+
+	// Nothing typed at all is a wrong name too.
+	if rec, _ := run("r", "enter", "@pump"); len(rec.calls) != 0 {
+		t.Errorf("an empty entry removed the garrison: %v", rec.calls)
+	}
+
+	// Right name: removed, garrison and all.
+	rec, got = run("r", "@type:frontline", "enter", "@pump")
+	if len(rec.calls) != 1 || !rec.calls[0] {
+		t.Fatalf("the right name did not remove the garrison: %v", rec.calls)
+	}
+	if !strings.Contains(got, "FRONTLINE RECALLED") {
+		t.Errorf("the removal never reached the screen:\n%s", got)
+	}
+
+	// A typo corrected is the right name.
+	if rec, _ := run("r", "@type:frontlinx", "backspace", "@type:e", "enter", "@pump"); len(rec.calls) != 1 {
+		t.Errorf("backspace did not correct the entry: %v", rec.calls)
+	}
+
+	// Cancel: esc stands it down, and nothing is removed.
+	rec, got = run("r", "@type:front", "esc", "@pump")
+	if len(rec.calls) != 0 || strings.Contains(got, "REMOVE GARRISON") {
+		t.Errorf("esc did not stand the removal down: %v\n%s", rec.calls, got)
+	}
+}
+
+// On the typed card every letter is text. A loadout whose name holds y, n or q
+// must be typeable, and must not confirm or leave on one of its own letters.
+func TestTheTypedCardTakesEveryLetterAsText(t *testing.T) {
+	r := fakeRecords{
+		root:      "/repo/lab",
+		loadouts:  []*loadout.Loadout{unitLoadout("synq", "a")},
+		garrisons: []garrison.Garrison{garrisonHere("synq", 1)},
+	}
+	rec := &recallTracker{}
+	cfg := withActions(cfgFor(r))
+	cfg.Recall = rec.recall
+
+	got := plain(Frame(cfg, 100, 30, "r", "@type:syn", "@pump"))
+	if len(rec.calls) != 0 {
+		t.Fatalf("a letter confirmed the removal: %v", rec.calls)
+	}
+	if !strings.Contains(got, "> syn") {
+		t.Errorf("the typed letters were not taken as text:\n%s", got)
+	}
+	Frame(cfg, 100, 30, "r", "@type:synq", "enter", "@pump")
+	if len(rec.calls) != 1 || !rec.calls[0] {
+		t.Errorf("a name holding y, n and q could not be typed: %v", rec.calls)
+	}
+}
+
+// The typed card holds the frame at the smallest size the roster claims, and
+// never cuts the line being typed into or the one that says how to leave.
+func TestTheTypedCardHoldsTheFrame(t *testing.T) {
+	long := "a-loadout-with-a-name-long-enough-to-need-wrapping-on-a-narrow-card"
+	r := fakeRecords{
+		root:      "/repo/lab",
+		loadouts:  []*loadout.Loadout{unitLoadout(long, "a")},
+		leases:    []*lease.Lease{spawnedLease(long, "/repo/lab", "/repo/lab/.claude/skills", 1)},
+		garrisons: []garrison.Garrison{garrisonHere(long, 120)},
+	}
+	for _, size := range [][2]int{{80, 24}, {60, 20}, {80, 14}, {60, 12}} {
+		w, h := size[0], size[1]
+		got := plain(Frame(withActions(cfgFor(r)), w, h, "r", "g", "@type:"+long+long))
+		what := fmt.Sprintf("%dx%d", w, h)
+		fits(t, got, w, h, what)
+		if !strings.Contains(got, "esc stand down") {
+			t.Errorf("%s: the typed card no longer says how to leave it:\n%s", what, got)
+		}
+		if !strings.Contains(got, "> …") {
+			t.Errorf("%s: a long entry was not shown by its end:\n%s", what, got)
+		}
 	}
 }
 
@@ -1946,11 +2120,14 @@ func TestNoCardCutsItsOwnProseInHalf(t *testing.T) {
 		root:     "/repo/lab",
 		loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")},
 		leases:   []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 1)},
+		// A garrison beside the spawn, so the recall card carries its garrison
+		// sentences and the typed card is reachable.
+		garrisons: []garrison.Garrison{garrisonHere("frontline", 12)},
 	}
 	cfg := withActions(cfgFor(r))
 
 	for _, w := range []int{60, 80, 100} {
-		for _, script := range [][]string{{"s"}, {"r"}, {"g"}, {"L"}} {
+		for _, script := range [][]string{{"s"}, {"r"}, {"g"}, {"L"}, {"r", "g"}} {
 			frame := plain(Frame(cfg, w, 34, script...))
 			for _, line := range strings.Split(frame, "\n") {
 				if !strings.ContainsRune(line, '║') {

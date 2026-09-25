@@ -216,7 +216,7 @@ func TestGarrisonMatchesAPreIdentityLockfileByName(t *testing.T) {
 	h.mustRun("garrison", "frontend")
 	h.dropLockfileIdentities(t)
 	// Recall finds it too, and removes it rather than reporting nothing here.
-	if out := h.mustRun("recall", "frontend"); !strings.Contains(out, "recalled the frontend garrison") {
+	if out := h.mustRun("recall", "frontend", "--yes"); !strings.Contains(out, "recalled the frontend garrison") {
 		t.Errorf("recall over a pre-identity lockfile = %q", out)
 	}
 }

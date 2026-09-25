@@ -19,7 +19,7 @@ func newUpgradeCmd(env *Env) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "upgrade [loadout...]",
-		Short: "Re-resolve loadout sources and relink live spawns",
+		Short: "Re-resolve sources, relink live spawns and rewrite committed files",
 		Long: strings.TrimSpace(`
 Re-resolves each source's declared ref, fetches whatever it now points at, and
 relinks every live spawn onto the new commit. With no loadout named, every

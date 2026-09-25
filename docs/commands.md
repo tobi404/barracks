@@ -390,11 +390,13 @@ reports that as a note until you run `barracks garrison <loadout> --force`.
 
 ## `barracks recall <loadout>`
 
-Removes a spawned loadout, leaving the repo exactly as it was.
+Removes a loadout from this repository - its spawns, leaving the repo exactly as it was, and
+its garrison if it has one here.
 
 ```bash
 barracks recall frontend
 barracks recall frontend --target cursor   # leave the other agents alone
+barracks recall frontend --yes             # remove a garrison without being asked
 barracks recall --all
 ```
 
@@ -416,6 +418,18 @@ recalled the frontend garrison (4 files removed, barracks.lock updated)
 ! left in place: .claude/skills/react/reference.md - edited since it was committed - your change is kept
 ! left in place: .claude/skills/react/handwritten.md - barracks has no record of putting it there
 ```
+
+Removing a garrison is asked about first. On a terminal, recall says how many committed files
+it will remove and waits for a `y`; anything else leaves both the garrison and the spawns
+exactly as they were.
+
+```text
+frontend garrison: remove 4 committed files and rewrite barracks.lock? [y/N]
+```
+
+Anywhere else - a script, a pipe, CI - there is nobody to ask, so recall refuses and changes
+nothing; pass `--yes` (`-y`) to say the removal was meant. A recall that only reaches spawns
+never asks.
 
 The removal is a change to tracked files, so it appears in `git status` for review like any
 other - and is recoverable with `git checkout` if it was not what you meant.

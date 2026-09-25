@@ -78,8 +78,8 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 		Deploy: func(ctx context.Context, l *loadout.Loadout, chosen, skills []string, s tui.Session) tui.Outcome {
 			return e.tuiDeploy(ctx, l, chosen, skills, s)
 		},
-		Recall: func(ctx context.Context, l *loadout.Loadout) tui.Outcome {
-			return e.tuiRecall(ctx, l)
+		Recall: func(ctx context.Context, l *loadout.Loadout, committed bool) tui.Outcome {
+			return e.tuiRecall(ctx, l, committed)
 		},
 		Garrison: func(ctx context.Context, l *loadout.Loadout, s tui.Session) tui.Outcome {
 			return e.tuiGarrison(ctx, l, s)
@@ -247,14 +247,16 @@ func (e *Env) tuiDeploy(ctx context.Context, l *loadout.Loadout, targets, skills
 	return out
 }
 
-// tuiRecall is `barracks recall <loadout>` for the spawns in this repository.
+// tuiRecall is `barracks recall <loadout>` for the spawns in this repository,
+// and - with committed - for its garrison here as well.
 //
-// The committed tier is deliberately out of scope here: `barracks recall` also
-// removes a garrison, and removing tracked files from somebody's checkout is not
-// something the roster offers behind a single key. The recall card says so, so
-// the asymmetry with the garrison order beside it is stated rather than left to
-// be discovered.
-func (e *Env) tuiRecall(ctx context.Context, l *loadout.Loadout) tui.Outcome {
+// The roster only passes committed from the card on which the loadout's name
+// was typed out: removing tracked files from somebody's checkout is not
+// something it does behind a single key. That card is the confirmation, so the
+// command's own prompt is never reached from here - it lives in the command,
+// where stdin is a terminal a person is answering, and the roster is the one
+// thing that terminal is not while it is drawing.
+func (e *Env) tuiRecall(ctx context.Context, l *loadout.Loadout, committed bool) tui.Outcome {
 	restore := e.captureStreams()
 	defer restore()
 
@@ -270,6 +272,28 @@ func (e *Env) tuiRecall(ctx context.Context, l *loadout.Loadout) tui.Outcome {
 
 	out := tui.Outcome{Title: fmt.Sprintf("%s recalled", l.Name)}
 	found := false
+	if committed {
+		// Found the way the command finds it - the lockfile's own matching. It
+		// is reported as a row beside the spawn rows below rather than in the
+		// command's sentence, which repeats the loadout the title already names
+		// and is wider than a card: cut there, it loses the lockfile clause,
+		// the one committed-tier fact the card exists to say.
+		for _, ref := range e.garrisonsHere(loc.Root, l.Name, false) {
+			rep, err := e.garrisons.Remove(loc.Root, ref)
+			if err != nil {
+				return tui.Outcome{Err: err, Notices: append(notices, e.capturedNotices()...)}
+			}
+			found = true
+			out.Lines = append(out.Lines, fmt.Sprintf("garrison  %d %s removed, %s updated",
+				len(rep.Removed), plural(len(rep.Removed), "file", "files"), garrison.LockName))
+			for _, k := range rep.Kept {
+				notices = append(notices, fmt.Sprintf("left in place: %s - %s", k.Path, k.Reason))
+			}
+			for _, err := range rep.Errors {
+				notices = append(notices, err.Error())
+			}
+		}
+	}
 	for _, ls := range lease.FindInScope(leases, loc.Scope, loc.Root) {
 		if ls.Loadout != l.Name {
 			continue

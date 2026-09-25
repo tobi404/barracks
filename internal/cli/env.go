@@ -29,8 +29,12 @@ import (
 
 // Env is the injectable environment a barracks invocation runs in.
 type Env struct {
-	Out    io.Writer
-	Err    io.Writer
+	Out io.Writer
+	Err io.Writer
+	// In is where a command reads a confirmation from. Only a command that
+	// removes something it cannot put back asks at all, and only when InTty
+	// and Tty both say a person is there to answer.
+	In     io.Reader
 	Cwd    string
 	Layout paths.Layout
 	Now    func() time.Time
@@ -53,6 +57,11 @@ type Env struct {
 	// leaves a file that must never receive an escape code. Each stream is
 	// judged by what it is attached to. A nil ErrTty means "not a terminal".
 	ErrTty func() bool
+	// InTty reports whether stdin is a terminal. It is the other half of the
+	// question a confirmation prompt asks: a prompt read from a pipe answers
+	// itself with whatever the pipe happens to hold, and one read from nothing
+	// waits for a person who is not there. A nil InTty means "not a terminal".
+	InTty func() bool
 	// Rand picks between a step's interchangeable flavor lines. Tests set it to
 	// make the choice deterministic.
 	Rand func() uint64
@@ -159,6 +168,12 @@ func (e *Env) speak(command, subject string) {
 
 func (e *Env) isTerminal() bool {
 	return e.Tty != nil && e.Tty()
+}
+
+// canAsk reports whether a person is there to answer a question: stdin to read
+// the answer from, and stdout, where the question is printed, both terminals.
+func (e *Env) canAsk() bool {
+	return e.In != nil && e.InTty != nil && e.InTty() && e.isTerminal()
 }
 
 func (e *Env) errIsTerminal() bool {
