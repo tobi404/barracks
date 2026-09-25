@@ -1024,7 +1024,7 @@ func TestOnlyRAnnouncesAMuster(t *testing.T) {
 	r := fakeRecords{root: "/repo/lab", leases: []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 1)},
 		loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
 	cfg := cfgFor(r)
-	cfg.Recall = func(context.Context, *loadout.Loadout) Outcome { return Outcome{Title: "frontline recalled"} }
+	cfg.Recall = func(context.Context, *loadout.Loadout, bool) Outcome { return Outcome{Title: "frontline recalled"} }
 	got := plain(Frame(cfg, 110, 30, "r", "y", "@pump", "esc"))
 	if strings.Contains(got, "FRONTLINE RECALLED") || strings.Contains(got, "Mustered") {
 		t.Errorf("an order's re-read announced a muster:\n%s", got)
