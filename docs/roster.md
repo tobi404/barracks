@@ -73,7 +73,7 @@ is the one state this tier must never be left in.
 |---|---|
 | `↑`/`k`, `↓`/`j` | move up and down the line |
 | `s` | spawn the selected unit here, choosing its targets and its skills |
-| `r` | recall its spawns from here |
+| `r` | recall its spawns from here, or its garrison by typing its name |
 | `g` | garrison it into this repository |
 | `u` | plan an upgrade of its sources, then carry it out |
 | `L` | run an agent with it, and recall it when the agent exits |
@@ -82,9 +82,14 @@ is the one state this tier must never be left in.
 | `?` | the orders overlay |
 | `q` | leave |
 
-`r` covers your own spawns and leaves a garrison exactly where it is - removing tracked files
-from a checkout is not something that should sit behind a single key press. Use
-`barracks recall <loadout>` for that.
+`r` recalls your own spawns with a single `y`, and leaves a garrison exactly where it is -
+removing tracked files from a checkout is not something that should sit behind a single key
+press. Where the unit is also garrisoned here, the recall card says so and offers `g`, which
+opens a second card: it says how many committed files will be removed and that
+`barracks.lock` is rewritten, and it goes ahead only once you have typed the loadout's name
+exactly and pressed `enter`. `esc` stands it down. That card recalls the unit's spawns here
+too, exactly as `barracks recall <loadout>` does. A unit that is only garrisoned here goes
+straight to that card.
 
 The roster does not train, equip, strip or rename. Those stay commands, and no key is bound
 to them - a key that announces it does not work is still a key you have to learn.

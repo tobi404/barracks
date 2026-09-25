@@ -39,6 +39,11 @@ type harness struct {
 	// errTty forces the same condition for stderr, which is what the progress
 	// indicator is gated on. See progress_test.go.
 	errTty bool
+	// in is what a confirmation prompt reads, and inTty says stdin is a
+	// terminal a person is answering from. Both are off by default, as they are
+	// for a script, so a removal that asks is refused unless a test says yes.
+	in    string
+	inTty bool
 	// progressAfter is how long an operation must run before progress announces
 	// it. newHarness sets it far beyond any test's runtime, so the rest of the
 	// suite sees nothing however loaded the machine running it is; the progress
@@ -122,6 +127,8 @@ func (h *harness) run(args ...string) (string, string, error) {
 		Home:   func() (string, error) { return h.home, nil },
 		Tty:    func() bool { return h.tty },
 		ErrTty: func() bool { return h.errTty },
+		In:     strings.NewReader(h.in),
+		InTty:  func() bool { return h.inTty },
 		Rand:   h.rnd,
 
 		ProgressAfter: h.progressAfter,

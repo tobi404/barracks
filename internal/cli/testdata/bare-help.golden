@@ -33,7 +33,7 @@ Available Commands:
   help        Help about any command
   inspect     Check this checkout against barracks.lock
   list        List every loadout in the barracks
-  recall      Recall a spawned loadout from the current repo
+  recall      Recall a loadout from the current repo, spawned or committed
   rename      Rename a loadout, keeping everything it is deployed into working
   run         Spawn a loadout, run a command, recall on exit
   spawn       Spawn a loadout into the current repo
@@ -41,7 +41,7 @@ Available Commands:
   targets     List the agents barracks can deploy to
   train       Train a new loadout
   tui         Open the full-screen roster
-  upgrade     Re-resolve loadout sources and relink live spawns
+  upgrade     Re-resolve sources, relink live spawns and rewrite committed files
 
 Flags:
   -h, --help      help for barracks

@@ -72,9 +72,11 @@ type Config struct {
 	// reports to Session rather than drawing on the roster, and anything it
 	// starts may prompt there and be answered.
 	Deploy func(ctx context.Context, l *loadout.Loadout, targets, skills []string, s Session) Outcome
-	// Recall removes every spawn of a loadout in this scope. The committed tier
-	// is deliberately not part of it - see the roster's recall order.
-	Recall func(ctx context.Context, l *loadout.Loadout) Outcome
+	// Recall removes every spawn of a loadout in this scope. With committed set
+	// it removes the loadout's garrison here as well - `barracks recall
+	// <loadout>` - which the roster only asks for from the typed card, because
+	// that deletes tracked files from the checkout.
+	Recall func(ctx context.Context, l *loadout.Loadout, committed bool) Outcome
 	// Garrison commits a loadout into this repository: real files plus
 	// barracks.lock, for everyone who clones it. It fetches, so it too runs
 	// with the terminal handed back.

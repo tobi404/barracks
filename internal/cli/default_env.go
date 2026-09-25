@@ -24,6 +24,7 @@ func DefaultEnv() (*Env, error) {
 	return &Env{
 		Out:    os.Stdout,
 		Err:    os.Stderr,
+		In:     os.Stdin,
 		Cwd:    cwd,
 		Layout: layout,
 		Now:    time.Now,
@@ -33,6 +34,7 @@ func DefaultEnv() (*Env, error) {
 		Home:   os.UserHomeDir,
 		Tty:    func() bool { return isTerminal(os.Stdout) },
 		ErrTty: func() bool { return isTerminal(os.Stderr) },
+		InTty:  func() bool { return isTerminal(os.Stdin) },
 	}, nil
 }
 

@@ -403,6 +403,8 @@ func (m *model) overlay() string {
 	switch m.scr {
 	case screenConfirm:
 		return m.confirmModal()
+	case screenTyped:
+		return m.typedModal()
 	case screenWorking:
 		return m.workingModal()
 	case screenPreview:
@@ -507,12 +509,15 @@ func (m *model) confirmModal() string {
 	case orderRecall:
 		line(fmt.Sprintf("Stand %s down from %s?", u.Loadout.Name, filepath.Base(m.st.Root)))
 		dim(fmt.Sprintf("%d live %s here.", len(u.Here), plural(len(u.Here), "spawn", "spawns")))
-		// The asymmetry is deliberate and is said out loud rather than left for
-		// somebody to discover: a recall from the roster is the personal tier
-		// only, because removing tracked files from a checkout is not something
-		// a single key press should do.
-		dim("Spawns only - a garrison stays where it is.")
-		dim("Remove that with: barracks recall " + u.Loadout.Name)
+		// `y` here is the personal tier only, and where a garrison stands beside
+		// the spawns that is said out loud rather than left for somebody to
+		// discover: removing tracked files from a checkout is not something a
+		// single key press should do, so it is one key further on, behind the
+		// typed card. A unit with no garrison hears nothing about one.
+		if u.Committed != nil {
+			dim("Spawns only - the garrison stays.")
+			dim("g removes the garrison too, by name.")
+		}
 	case orderGarrison:
 		line(fmt.Sprintf("Commit %s into %s?", u.Loadout.Name, filepath.Base(m.st.Root)))
 		// Where it goes is part of the head, never the body: these files are
@@ -576,6 +581,13 @@ func (m *model) confirmModal() string {
 // no card is drawn narrower than it.
 func (m *model) confirmHint(width int) string {
 	forms := []string{"y confirm   n stand down"}
+	if u, ok := m.selected(); ok && m.pending == orderRecall && u.Committed != nil {
+		forms = []string{
+			"y confirm   g garrison too   n stand down",
+			"y · g garrison too · n stand down",
+			"y · g · n stand down",
+		}
+	}
 	if len(m.pick.options) > 0 {
 		forms = []string{
 			"space choose   ↑/↓ move   y confirm   n stand down",
@@ -589,6 +601,80 @@ func (m *model) confirmHint(width int) string {
 		}
 	}
 	return forms[len(forms)-1]
+}
+
+// typedModal is the card that removes a garrison: the recall, reaching the
+// committed tier, confirmed by typing the loadout's name.
+//
+// What gives way follows confirmModal's order, with the typed line in the
+// place the picker holds there: the head names the unit and the repository, the
+// foot says how to leave, and the sentence asking for the name - which is also
+// the one that says how many committed files go and that barracks.lock is
+// rewritten - is never cut, together with the line being typed into, because a
+// confirmation you cannot read or cannot see yourself type is one you cannot
+// give. The prose around it shrinks first, then the blank rows.
+func (m *model) typedModal() string {
+	u, ok := m.selected()
+	if !ok || u.Committed == nil {
+		return ""
+	}
+	text := m.cardText()
+	name := u.Loadout.Name
+	files := u.Committed.FileCount()
+
+	head := []string{
+		m.th.title.Render("REMOVE GARRISON"), "",
+		m.th.body.Render(truncate(fmt.Sprintf("Remove %s from %s?", name, filepath.Base(m.st.Root)), text)),
+	}
+	var body []string
+	dim := func(s string) { body = append(body, m.th.faint.Render(truncate(s, text))) }
+	// Written to cardProse, as every card's prose is.
+	if n := len(u.Here); n > 0 {
+		dim(fmt.Sprintf("Recalls its %d live %s here too.", n, plural(n, "spawn", "spawns")))
+	}
+	dim("A file edited since its commit is kept.")
+	dim("The removal shows in git status for review.")
+
+	// Wrapped rather than cut: it carries the name to be typed, and half of it
+	// is a name that cannot be matched.
+	ask := []string{""}
+	sentence := fmt.Sprintf("Type %s to remove %d committed %s and rewrite %s.",
+		name, files, plural(files, "file", "files"), "barracks.lock")
+	for _, line := range strings.Split(wrap(sentence, text), "\n") {
+		ask = append(ask, m.th.body.Render(line))
+	}
+	// The end of what has been typed is what the eye is on, so a long entry
+	// gives up its beginning rather than the letters just typed.
+	entry := []rune(m.typed + "▏")
+	if room := maxInt(1, text-2); len(entry) > room {
+		entry = append([]rune("…"), entry[len(entry)-room+1:]...)
+	}
+	ask = append(ask, m.th.cursor.Render("> "+string(entry)))
+
+	foot := []string{"", m.th.faint.Render("enter confirm   esc stand down")}
+	if m.note != "" {
+		foot = append([]string{"", m.th.fail.Render(truncate(m.note, text))}, foot...)
+	}
+
+	// On a terminal too short for all of it, the blank rows go before anything
+	// that says something: the one above the question, then the one under the
+	// title, then the one above the foot.
+	rows := m.cardRows()
+	if len(head)+len(ask)+len(foot) > rows {
+		ask = ask[1:]
+	}
+	if len(head)+len(ask)+len(foot) > rows {
+		head = append([]string{head[0]}, head[2:]...)
+	}
+	if len(head)+len(ask)+len(foot) > rows && foot[0] == "" {
+		foot = foot[1:]
+	}
+	body = m.elide(body, rows-len(head)-len(ask)-len(foot))
+	out := append([]string{}, head...)
+	out = append(out, body...)
+	out = append(out, ask...)
+	out = append(out, foot...)
+	return m.card(out...)
 }
 
 // pickerRows is the picker's own part of the card, in at most n rows, or none

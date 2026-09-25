@@ -63,7 +63,7 @@ func TestGarrisonLifecycle(t *testing.T) {
 		t.Error("disband succeeded while the loadout was garrisoned")
 	}
 
-	out = h.mustRun("recall", "frontend")
+	out = h.mustRun("recall", "frontend", "--yes")
 	if !strings.Contains(out, "recalled the frontend garrison") {
 		t.Errorf("recall output = %q", out)
 	}
@@ -179,7 +179,7 @@ func TestRecallLeavesAGarrisonAloneWhenNarrowed(t *testing.T) {
 	h.mustRun("inspect")
 
 	// Unnarrowed, --all reaches it.
-	out = h.mustRun("recall", "--all")
+	out = h.mustRun("recall", "--all", "--yes")
 	if !strings.Contains(out, "recalled the frontend garrison") {
 		t.Errorf("recall --all missed the garrison:\n%s", out)
 	}

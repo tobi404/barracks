@@ -18,10 +18,11 @@ import (
 // the reason a layout regression is something the suite can catch rather than
 // something a person has to notice.
 //
-// A script entry is either a key name ("j", "enter", "esc") or one of two
+// A script entry is either a key name ("j", "enter", "esc") or one of these
 // directives:
 //
 //	@size:WxH  resize the terminal mid-script
+//	@type:TEXT press one key per character of TEXT, as somebody typing it
 //	@work      run every command the model has returned so far, holding their
 //	           results, which is what makes the in-flight screen capturable
 //	@pump      the same, and deliver the held results too
@@ -88,6 +89,10 @@ func FrameAndTerminal(cfg Config, w, h int, script ...string) (string, string) {
 		case step == "@pump":
 			for drain(true); len(pending) > 0; drain(true) {
 			}
+		case strings.HasPrefix(step, "@type:"):
+			for _, r := range step[len("@type:"):] {
+				deliver(keyPress(string(r)))
+			}
 		case strings.HasPrefix(step, "@size:"):
 			var nw, nh int
 			if _, err := fmt.Sscanf(step[6:], "%dx%d", &nw, &nh); err == nil {
@@ -107,6 +112,8 @@ func keyPress(name string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
 		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "backspace":
+		return tea.KeyPressMsg{Code: tea.KeyBackspace}
 	case "up":
 		return tea.KeyPressMsg{Code: tea.KeyUp}
 	case "down":

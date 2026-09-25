@@ -150,7 +150,7 @@ func TestTheGarrisonCardSaysWhereItWillCommit(t *testing.T) {
 	if out := h.mustRun("garrison", "alpha"); !strings.Contains(out, "targets: claude (detected in this repository)") {
 		t.Errorf("the command and the card disagree about where alpha goes:\n%s", out)
 	}
-	h.mustRun("recall", "alpha")
+	h.mustRun("recall", "alpha", "--yes")
 
 	// An existing garrison keeps what its lockfile records, and the card says
 	// that is why - and names every agent, however narrow the terminal.

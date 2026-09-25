@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -22,13 +24,15 @@ func newRecallCmd(env *Env) *cobra.Command {
 		global    bool
 		targetIDs []string
 		all       bool
+		yes       bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "recall [loadout]",
-		Short: "Recall a spawned loadout from the current repo",
+		Short: "Recall a loadout from the current repo, spawned or committed",
 		Long: strings.TrimSpace(`
-Removes a spawned loadout, leaving the repo exactly as it was.
+Removes a loadout from this repository: its spawns, leaving the repo
+exactly as it was, and its garrison if it has one here.
 
 A loadout spawned into two agents is recalled from both by one command, because
 it was one spawn. Narrow that with --target when you want to leave one behind.
@@ -47,7 +51,13 @@ where they still match the digest barracks.lock recorded; a file edited since it
 was committed is kept and reported. The removal is a change to tracked files, so
 it shows up in git status for review like any other.
 
+Removing committed files is asked about first: on a terminal, recall says how
+many files it will remove and waits for a yes. Anywhere else - a script, a pipe,
+CI - it refuses rather than guessing, and --yes is how a script says it meant it.
+A recall that only touches spawns never asks.
+
   barracks recall frontend
+  barracks recall frontend --yes
   barracks recall frontend --target cursor
   barracks recall frontend --global
   barracks recall --all`),
@@ -103,6 +113,13 @@ it shows up in git status for review like any other.
 				}
 				return fmt.Errorf("%s is not deployed %s", args[0], where)
 			}
+			// Asked before anything is touched, so a "no" - or a script that
+			// never said yes - leaves both tiers exactly as they were.
+			if len(garrisoned) > 0 && !yes {
+				if err := env.confirmGarrisonRemoval(loc.Root, garrisoned); err != nil {
+					return err
+				}
+			}
 			for _, ref := range garrisoned {
 				rep, err := env.garrisons.Remove(loc.Root, ref)
 				if err != nil {
@@ -124,5 +141,63 @@ it shows up in git status for review like any other.
 	cmd.Flags().BoolVar(&global, "global", false, "recall from each agent's user-level skills directory")
 	cmd.Flags().StringSliceVar(&targetIDs, "target", nil, targetFlagHelp("recall from")+"; default every agent")
 	cmd.Flags().BoolVar(&all, "all", false, "recall every loadout deployed here")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "remove a committed garrison without asking")
 	return cmd
+}
+
+// errNotConfirmed is a garrison removal nobody said yes to. It is an error, not
+// a quiet success, because nothing was recalled: the exit status has to say so,
+// and cobra skipping PersistentPostRun on an error is what keeps a flavor line
+// from following a command that changed nothing.
+var errNotConfirmed = errors.New("nothing was recalled")
+
+// confirmGarrisonRemoval asks before a recall removes committed files.
+//
+// A spawn is barracks' own symlinks and comes back with one command; a garrison
+// is tracked files in somebody's checkout, and the roster will not remove one
+// without the loadout's name typed out in full. The command asks too, rather
+// than being the unguarded way round that card. Only a person at a terminal is
+// asked: off one there is nobody to answer, so the command refuses and names the
+// flag that says the removal was meant.
+func (e *Env) confirmGarrisonRemoval(root string, refs []garrison.Ref) error {
+	files := committedFiles(root, refs)
+	names := make([]string, len(refs))
+	for i, r := range refs {
+		names[i] = r.Loadout
+	}
+	what := fmt.Sprintf("remove %d committed %s and rewrite %s",
+		files, plural(files, "file", "files"), garrison.LockName)
+	if !e.canAsk() {
+		return fmt.Errorf("recalling the %s %s would %s; pass --yes to do that without a terminal to confirm on",
+			strings.Join(names, ", "), plural(len(refs), "garrison", "garrisons"), what)
+	}
+	fmt.Fprintf(e.Out, "%s %s: %s? [y/N] ",
+		strings.Join(names, ", "), plural(len(refs), "garrison", "garrisons"), what)
+	answer, err := bufio.NewReader(e.In).ReadString('\n')
+	if err != nil && answer == "" {
+		// No answer at all is not a yes. The line the prompt left open is
+		// closed, so whatever is printed next starts on a line of its own.
+		fmt.Fprintln(e.Out)
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return nil
+	}
+	return errNotConfirmed
+}
+
+// committedFiles is how many files the lockfile records for these garrisons -
+// what a removal would take out if nobody had edited any of them.
+func committedFiles(root string, refs []garrison.Ref) int {
+	m, err := garrison.Load(root)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, r := range refs {
+		if g := m.FindFor(r.ID, r.Loadout); g != nil {
+			n += g.FileCount()
+		}
+	}
+	return n
 }
