@@ -456,7 +456,7 @@ deliberate decision, not a refactor.
   reason for that case (`chosen on the roster`) because `target.Selection.Reason` says "given
   on the command line", which is true of a flag and false of a full-screen picker; the engine
   is untouched, only the sentence is the roster's. The menu itself is `target.Registry` via
-  `cli.targetOptions`, and the launch menu is the registry's own `Binaries` filtered by
+  `cli.Env.targetOptions`, and the launch menu is the registry's own `Binaries` filtered by
   `exec.LookPath` - an entry that is not installed is a key that does nothing, one step later.
 - **The picker is one list with several bands, and `touched` belongs to the band.** A deploy
   card offers TARGETS and SKILLS, and they are one widget with one cursor rather than two

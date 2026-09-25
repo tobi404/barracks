@@ -112,9 +112,9 @@ func TestAGlobalSpawnDoesNotSteerOtherGlobalSpawns(t *testing.T) {
 	}
 }
 
-// cardProse is the text inside the card in a frame, one space between rows,
+// cardSentence is the text inside the card in a frame, one space between rows,
 // so a sentence the card wrapped reads back whole.
-func cardProse(frame string) string {
+func cardSentence(frame string) string {
 	var rows []string
 	for _, line := range strings.Split(frame, "\n") {
 		first, last := strings.Index(line, "║"), strings.LastIndex(line, "║")
@@ -138,7 +138,7 @@ func TestTheGarrisonCardSaysWhereItWillCommit(t *testing.T) {
 	h.equipped("scout", "--only", "react")
 	h.mustRun("spawn", "scout", "--target", "claude", "--target", "cursor")
 
-	card := cardProse(h.frame(120, 32, "g"))
+	card := cardSentence(h.frame(120, 32, "g"))
 	if !strings.Contains(card, "Into: Claude Code (detected in this repository).") {
 		t.Errorf("the garrison card does not say where it will commit:\n%s", card)
 	}
@@ -156,7 +156,7 @@ func TestTheGarrisonCardSaysWhereItWillCommit(t *testing.T) {
 	// that is why - and names every agent, however narrow the terminal.
 	h.mustRun("garrison", "alpha", "--target", "claude", "--target", "agents")
 	for _, w := range []int{60, 120} {
-		card = cardProse(h.frame(w, 32, "g"))
+		card = cardSentence(h.frame(w, 32, "g"))
 		want := "Into: Claude Code, AGENTS.md agents (Codex, opencode, Cursor) (recorded in " + garrison.LockName + ")."
 		if !strings.Contains(card, want) {
 			t.Errorf("%d columns: the card does not name the lockfile's agents:\n%s", w, card)
