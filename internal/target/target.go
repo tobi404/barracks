@@ -8,6 +8,7 @@ package target
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -313,16 +314,30 @@ func IDs() []string {
 	return out
 }
 
+// Spawned reports whether a path is part of what barracks' own personal
+// spawns put on disk: a directory a lease records creating, or a symlink it
+// records linking. Nil discounts nothing.
+//
+// It is a question rather than a lease list so this package stays the leaf it
+// is: the lease records are read by the caller, and only the answer crosses.
+type Spawned func(path string) bool
+
 // Detect returns the targets whose markers are present under root, registry
 // order preserved.
 //
 // This is how a loadout that declares nothing avoids guessing: a repository
-// with a .cursor directory is a repository where Cursor is in use.
-func Detect(root string) []Target {
+// with a .cursor directory is a repository where Cursor is in use. A .cursor
+// that barracks made itself for a personal spawn is not that evidence, though -
+// counted, one loadout's `spawn --target cursor` would decide where every other
+// loadout goes, and a garrison falling through to detection would commit
+// Cursor files for the whole team on the strength of a symlink nobody else can
+// see. So a marker spawned reports as barracks' own counts only once it holds
+// something barracks did not put there. See evidence.
+func Detect(root string, spawned Spawned) []Target {
 	var out []Target
 	for _, t := range Registry {
 		for _, m := range t.Markers {
-			if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(m))); err == nil {
+			if evidence(filepath.Join(root, filepath.FromSlash(m)), spawned) {
 				out = append(out, t)
 				break
 			}
@@ -335,19 +350,55 @@ func Detect(root string) []Target {
 // has a parent on disk - the agent's own config directory.
 //
 // It needs no extra map data: the global location is already declared, and its
-// parent is the directory the agent creates when it is installed.
-func DetectGlobal(env func(string) string, home func() (string, error)) []Target {
+// parent is the directory the agent creates when it is installed. The parent a
+// global spawn created itself is discounted exactly as Detect discounts one in
+// a repository, for the same reason.
+func DetectGlobal(env func(string) string, home func() (string, error), spawned Spawned) []Target {
 	var out []Target
 	for _, t := range Registry {
 		dir, err := t.GlobalPath(env, home)
 		if err != nil {
 			continue
 		}
-		if _, err := os.Lstat(filepath.Dir(dir)); err == nil {
+		if evidence(filepath.Dir(dir), spawned) {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+// evidence reports whether the marker at path shows its agent in use.
+//
+// A marker barracks did not make is evidence by being there, which is all
+// detection ever asked. One it did make is evidence only once something inside
+// it is not barracks' own: the user, or the agent itself, has started using
+// the directory, and from then on it is as real as one that was always there.
+// That keeps the rule to "barracks does not count its own footprint" rather
+// than "barracks ignores a directory it once made", which would hide an agent
+// the repository has genuinely taken up for as long as the spawn stood.
+//
+// The walk never follows a symlink, and it stops at the first thing that is
+// not barracks' own. A marker it cannot read counts, which is the answer
+// detection gave before anything was discounted.
+func evidence(path string, spawned Spawned) bool {
+	if _, err := os.Lstat(path); err != nil {
+		return false
+	}
+	if spawned == nil || !spawned(path) {
+		return true
+	}
+	foreign := false
+	err := filepath.WalkDir(path, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !spawned(p) {
+			foreign = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return foreign || err != nil
 }
 
 // Select decides which targets a spawn goes into.

@@ -166,8 +166,11 @@ func TestRecallLeavesAGarrisonAloneWhenNarrowed(t *testing.T) {
 	h.mustRun("garrison", "frontend", "--target", "claude")
 	h.mustRun("spawn", "frontend", "--target", "cursor")
 
+	// The sentence a garrison removal prints, not the bare word: the report
+	// names the directory it recalled from, and a temporary directory is free
+	// to have "garrison" anywhere in its path.
 	out := h.mustRun("recall", "frontend", "--target", "cursor")
-	if strings.Contains(out, "garrison") {
+	if strings.Contains(out, "the frontend garrison") {
 		t.Errorf("a narrowed recall touched the garrison:\n%s", out)
 	}
 	if !testutil.Exists(h.garrisonPath(".claude/skills/react/SKILL.md")) {

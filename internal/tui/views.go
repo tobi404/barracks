@@ -515,6 +515,15 @@ func (m *model) confirmModal() string {
 		dim("Remove that with: barracks recall " + u.Loadout.Name)
 	case orderGarrison:
 		line(fmt.Sprintf("Commit %s into %s?", u.Loadout.Name, filepath.Base(m.st.Root)))
+		// Where it goes is part of the head, never the body: these files are
+		// cloned by everyone, and an agent the team never used is the one
+		// thing on this card worth stopping for. It is wrapped rather than cut
+		// because a list of agents cut short reads as the whole list.
+		if m.into != "" {
+			for _, row := range strings.Split(wrap(m.into, text), "\n") {
+				head = append(head, m.th.body.Render(row))
+			}
+		}
 		dim(sources)
 		dim("Real files plus barracks.lock, tracked by git.")
 		dim("Everyone who clones this repository gets them.")
