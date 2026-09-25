@@ -67,10 +67,13 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 	return tui.Config{
 		Records:   records{env: e, root: root},
 		Version:   Version,
-		Targets:   targetOptions(root),
+		Targets:   e.targetOptions(root),
 		Launchers: launchers(),
 		Selection: func(l *loadout.Loadout) ([]string, string, error) {
 			return e.deployTargets(ctx, l)
+		},
+		GarrisonTargets: func(l *loadout.Loadout) ([]string, string, error) {
+			return e.garrisonTargetsFor(ctx, l)
 		},
 		Deploy: func(ctx context.Context, l *loadout.Loadout, chosen, skills []string, s tui.Session) tui.Outcome {
 			return e.tuiDeploy(ctx, l, chosen, skills, s)
@@ -102,8 +105,11 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 // between one card and the next. That costs the picker two git subprocesses and
 // a walk of the repository each time it is raised, on the roster's own event
 // loop, and the cost is deliberate: the answer's whole promise is that leaving
-// the picker alone deploys exactly where the command would, and a deploy into a
-// new agent is precisely what makes that agent detected.
+// the picker alone deploys exactly where the command would, and that answer
+// moves under the roster - a loadout assigned, a garrison written, an agent's
+// directory created or removed by the user or the agent itself. A deploy is
+// not among them: what a personal spawn creates is its own footprint, and
+// detection does not count it.
 func (e *Env) deployTargets(ctx context.Context, l *loadout.Loadout) ([]string, string, error) {
 	sel, err := e.selectTargets(ctx, l, nil, false)
 	if err != nil {
@@ -112,16 +118,36 @@ func (e *Env) deployTargets(ctx context.Context, l *loadout.Loadout) ([]string, 
 	return sel.IDs(), sel.Reason(), nil
 }
 
+// garrisonTargetsFor answers where a garrison of a loadout would commit, and
+// why - by the very rule tuiGarrison then carries out, so the card cannot name
+// one set of agents and the order write into another. That includes an
+// existing garrison's targets as barracks.lock records them, which beat
+// detection. The files it writes are cloned by everyone, so this is the one
+// fact the card may never leave out.
+func (e *Env) garrisonTargetsFor(ctx context.Context, l *loadout.Loadout) ([]string, string, error) {
+	loc, err := e.repoScope(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	c, err := e.garrisonChoice(ctx, loc, l, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	return c.IDs(), c.Reason(), nil
+}
+
 // targetOptions is the menu the deploy picker offers: every agent barracks can
-// deploy to, marked with whether this repository already shows it.
+// deploy to, marked with whether this repository already shows it - by the same
+// detection a spawn uses, so the picker never calls an agent present that a
+// deploy left alone would not go to.
 //
 // It is built from the registry rather than from anything the roster knows, so
 // a new agent appears in the picker by being a new registry entry, exactly as
 // it appears everywhere else.
-func targetOptions(root string) []tui.TargetOption {
+func (e *Env) targetOptions(root string) []tui.TargetOption {
 	present := map[string]bool{}
 	if root != "" {
-		for _, t := range target.Detect(root) {
+		for _, t := range e.detectIn(root) {
 			present[t.ID] = true
 		}
 	}

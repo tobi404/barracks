@@ -960,7 +960,9 @@ func TestTheTargetMenuIsTheRegistry(t *testing.T) {
 	h := newHarness(t)
 	testutil.MkDir(t, filepath.Join(h.work.Dir, ".cursor"))
 
-	got := targetOptions(h.work.Dir)
+	var out, errb bytes.Buffer
+	env := h.envFor(&out, &errb)
+	got := env.targetOptions(h.work.Dir)
 	if len(got) != len(target.Registry) {
 		t.Fatalf("the menu offers %d targets and the registry has %d", len(got), len(target.Registry))
 	}
@@ -980,7 +982,7 @@ func TestTheTargetMenuIsTheRegistry(t *testing.T) {
 		t.Error("an agent this repository does not show was marked as present")
 	}
 	// Outside a repository nothing can be present, and asking must not panic.
-	for _, o := range targetOptions("") {
+	for _, o := range env.targetOptions("") {
 		if o.Present {
 			t.Errorf("%s was marked present with no repository to be present in", o.ID)
 		}
@@ -1161,10 +1163,13 @@ func TestARosterUpgradeThatResolvedNothingStillReconcilesAStrandedSpawn(t *testi
 // The deploy picker opens on where a plain `barracks spawn` would send the
 // loadout, and it has to still be true after the roster has deployed something.
 //
-// A deploy into an agent this repository did not show before makes that agent
-// detected, so the answer the card opened on a moment ago is no longer the
-// answer the command would give. Leaving the picker alone passes nothing
-// through as an override, so a card showing a stale set would install
+// A deploy into an agent the repository did not show is not evidence of that
+// agent: the directory it made is its own footprint, and counting it would let
+// one deployment decide where every later one goes. So the card opens on the
+// same answer after the deploy as before it. What does move that answer is the
+// agent really being taken up here - and the card, which is resolved afresh
+// each time it opens, has to see that too. Leaving the picker alone passes
+// nothing through as an override, so a card showing a stale set would install
 // somewhere the user was never shown.
 func TestThePickerOpensOnWhereTheSpawnWouldGoAfterAnOrderHasLanded(t *testing.T) {
 	h := newHarness(t)
@@ -1177,10 +1182,20 @@ func TestThePickerOpensOnWhereTheSpawnWouldGoAfterAnOrderHasLanded(t *testing.T)
 	if !testutil.IsSymlink(t, filepath.Join(h.work.Dir, ".cursor", "skills", "react")) {
 		t.Fatal("the deploy never landed, so the second card had nothing to notice")
 	}
-	if !strings.Contains(again, "[x] Cursor") {
-		t.Errorf("the picker did not open on the agent this repository now shows:\n%s", again)
+	if !strings.Contains(again, "[x] Claude Code") {
+		t.Errorf("the picker did not open on where a spawn would still go:\n%s", again)
 	}
-	if strings.Contains(again, "[x] Claude Code") {
-		t.Errorf("the picker opened on an answer the deploy had already made untrue:\n%s", again)
+	if strings.Contains(again, "[x] Cursor") {
+		t.Errorf("the picker counted the roster's own deploy as evidence of Cursor:\n%s", again)
+	}
+
+	// Cursor writes something of its own into the directory barracks made.
+	testutil.WriteFile(t, filepath.Join(h.work.Dir, ".cursor", "mcp.json"), "{}\n")
+	taken := h.frame(120, 32, "s")
+	if !strings.Contains(taken, "[x] Cursor") {
+		t.Errorf("the picker did not open on the agent this repository now shows:\n%s", taken)
+	}
+	if strings.Contains(taken, "[x] Claude Code") {
+		t.Errorf("the picker opened on an answer the repository had already made untrue:\n%s", taken)
 	}
 }

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
@@ -89,6 +90,9 @@ type model struct {
 	// pick is the picker the pending order's card is offering, empty for the
 	// orders that have nothing to choose.
 	pick picker
+	// into is where the pending garrison would commit, as the card says it:
+	// resolved when the card opens, and gone with the card.
+	into string
 	// note is what the card in front has to say for itself - a refusal raised
 	// by the card's own keys, which belongs on the card rather than in a status
 	// line the card may well be covering.
@@ -354,6 +358,7 @@ func (m *model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 func (m *model) stand(status string) {
 	m.scr, m.pending = screenRoster, orderNone
 	m.pick = picker{}
+	m.into = ""
 	m.note = ""
 	m.status = status
 }
@@ -386,7 +391,13 @@ func (m *model) propose(o order) tea.Cmd {
 		m.refused(err)
 		return nil
 	}
+	into, err := m.destinationFor(o, u)
+	if err != nil {
+		m.refused(err)
+		return nil
+	}
 	m.pick = pick
+	m.into = into
 	m.note = ""
 	if o == orderUpgrade {
 		return m.start(o)
@@ -483,12 +494,46 @@ func (m *model) pickerFor(o order, u unit) (picker, error) {
 	return picker{}, nil
 }
 
+// destinationFor is the sentence a card uses to say where an order will write,
+// for the order whose card has no picker to show it: a garrison. A deploy's
+// destinations are the ticked rows of its own picker.
+//
+// It is asked when the card opens and kept nowhere after it closes, for the
+// reason pickerFor gives. And it refuses on the same error the order itself
+// would stop on, rather than opening a card that names no destination.
+func (m *model) destinationFor(o order, u unit) (string, error) {
+	if o != orderGarrison || m.cfg.GarrisonTargets == nil {
+		return "", nil
+	}
+	ids, reason, err := m.cfg.GarrisonTargets(u.Loadout)
+	if err != nil {
+		return "", err
+	}
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		names = append(names, m.targetDisplay(id))
+	}
+	return fmt.Sprintf("Into: %s (%s).", strings.Join(names, ", "), reason), nil
+}
+
+// targetDisplay is an agent's human name as the menu gives it, or the ID for
+// one the menu does not know.
+func (m *model) targetDisplay(id string) string {
+	for _, t := range m.cfg.Targets {
+		if t.ID == id {
+			return t.Display
+		}
+	}
+	return id
+}
+
 // refused puts a refusal the roster raised itself in front of the user, in the
 // same panel an order's own refusal lands in. Nothing was written, so unlike a
 // finished order there is nothing to re-read.
 func (m *model) refused(err error) {
 	m.pending, m.working = orderNone, orderNone
 	m.pick = picker{}
+	m.into = ""
 	m.note, m.status = "", ""
 	m.apply = nil
 	m.result = Outcome{Err: err}
@@ -515,6 +560,7 @@ func (m *model) start(o order) tea.Cmd {
 	}
 	m.pending = orderNone
 	m.pick = picker{}
+	m.into = ""
 	m.note = ""
 	m.working = o
 	m.scr = screenWorking

@@ -229,7 +229,7 @@ func TestBinariesAreDistinct(t *testing.T) {
 
 func TestDetect(t *testing.T) {
 	root := t.TempDir()
-	if got := Detect(root); len(got) != 0 {
+	if got := Detect(root, nil); len(got) != 0 {
 		t.Errorf("Detect on an empty repo = %v, want nothing", got)
 	}
 
@@ -239,7 +239,7 @@ func TestDetect(t *testing.T) {
 		}
 	}
 	var ids []string
-	for _, tgt := range Detect(root) {
+	for _, tgt := range Detect(root, nil) {
 		ids = append(ids, tgt.ID)
 	}
 	// Registry order, not marker-creation order.
@@ -254,7 +254,7 @@ func TestDetectGlobal(t *testing.T) {
 	homeFn := func() (string, error) { return home, nil }
 	env := func(string) string { return "" }
 
-	if got := DetectGlobal(env, homeFn); len(got) != 0 {
+	if got := DetectGlobal(env, homeFn, nil); len(got) != 0 {
 		t.Errorf("DetectGlobal on a bare home = %v, want nothing", got)
 	}
 
@@ -263,9 +263,120 @@ func TestDetectGlobal(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".codeium", "windsurf"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got := DetectGlobal(env, homeFn)
+	got := DetectGlobal(env, homeFn, nil)
 	if len(got) != 1 || got[0].ID != "windsurf" {
 		t.Errorf("DetectGlobal = %v, want just windsurf", got)
+	}
+}
+
+// footprint is what a personal spawn leaves: the directories it records
+// creating and the symlinks it records linking, as absolute paths.
+func footprint(paths ...string) Spawned {
+	set := map[string]bool{}
+	for _, p := range paths {
+		set[filepath.Clean(p)] = true
+	}
+	return func(p string) bool { return set[filepath.Clean(p)] }
+}
+
+// spawnInto lays down what `spawn --target <id>` leaves in a repository where
+// that agent's marker did not exist: the marker, its skills directory and one
+// symlink, all of it barracks' own.
+func spawnInto(t *testing.T, root, marker string) []string {
+	t.Helper()
+	dir := filepath.Join(root, marker, "skills")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "alpha")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	return []string{filepath.Join(root, marker), dir, link}
+}
+
+func idsOf(ts []Target) string {
+	var ids []string
+	for _, t := range ts {
+		ids = append(ids, t.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
+// TestDetectDiscountsWhatAPersonalSpawnMade is the rule that keeps one
+// loadout's explicit target from deciding where every other loadout goes - and
+// from reaching the committed tier through a garrison that falls through to
+// detection.
+func TestDetectDiscountsWhatAPersonalSpawnMade(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	made := footprint(spawnInto(t, root, ".cursor")...)
+
+	if got := idsOf(Detect(root, nil)); got != "claude,cursor" {
+		t.Errorf("with nothing discounted Detect = %s, want claude,cursor", got)
+	}
+	if got := idsOf(Detect(root, made)); got != "claude" {
+		t.Errorf("Detect = %s, want only claude: .cursor holds nothing but a spawn's own footprint", got)
+	}
+
+	// Somebody - Cursor itself, or the user - puts something of their own in
+	// the directory barracks made. Now it is evidence like any other.
+	if err := os.WriteFile(filepath.Join(root, ".cursor", "mcp.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := idsOf(Detect(root, made)); got != "claude,cursor" {
+		t.Errorf("Detect = %s, want claude,cursor once .cursor holds something barracks did not put there", got)
+	}
+}
+
+// TestDetectKeepsAMarkerThatWasThereBeforeTheSpawn is the other half: a spawn
+// into an agent the repository already used records no marker as its own, so
+// nothing about it may be discounted.
+func TestDetectKeepsAMarkerThatWasThereBeforeTheSpawn(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".cursor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	paths := spawnInto(t, root, ".cursor")
+	made := footprint(paths[1:]...) // the skills directory and the link, not .cursor
+
+	if got := idsOf(Detect(root, made)); got != "cursor" {
+		t.Errorf("Detect = %s, want cursor: the marker predates the spawn", got)
+	}
+}
+
+// TestDetectCountsAMarkerItCannotRead keeps the conservative answer when the
+// marker cannot be looked into: it is present, which is all detection ever
+// asked before barracks' own footprint was discounted.
+func TestDetectCountsAMarkerItCannotRead(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads a directory whatever its mode")
+	}
+	root := t.TempDir()
+	paths := spawnInto(t, root, ".cursor")
+	if err := os.Chmod(paths[0], 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(paths[0], 0o755) })
+
+	if got := idsOf(Detect(root, footprint(paths...))); got != "cursor" {
+		t.Errorf("Detect = %s, want cursor for a marker barracks cannot read", got)
+	}
+}
+
+func TestDetectGlobalDiscountsWhatAPersonalSpawnMade(t *testing.T) {
+	home := t.TempDir()
+	homeFn := func() (string, error) { return home, nil }
+	env := func(string) string { return "" }
+	made := footprint(spawnInto(t, home, ".cursor")...)
+
+	if got := idsOf(DetectGlobal(env, homeFn, nil)); got != "cursor" {
+		t.Errorf("with nothing discounted DetectGlobal = %s, want cursor", got)
+	}
+	if got := idsOf(DetectGlobal(env, homeFn, made)); got != "" {
+		t.Errorf("DetectGlobal = %s, want nothing: ~/.cursor is only a global spawn's footprint", got)
 	}
 }
 
