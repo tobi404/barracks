@@ -3,6 +3,7 @@ package tui
 import (
 	"image/color"
 
+	"charm.land/bubbles/v2/help"
 	"charm.land/lipgloss/v2"
 )
 
@@ -68,4 +69,21 @@ func newTheme(dark bool) theme {
 		Padding(1, 3).
 		Margin(0, 1)
 	return t
+}
+
+// help styles the footer key bar from the palette. The widget's own defaults
+// are fixed dark greys that ignore the terminal's background and read poorly
+// on either one.
+func (t theme) help() help.Styles {
+	key := lipgloss.NewStyle().Foreground(t.steel)
+	desc := lipgloss.NewStyle().Foreground(t.dim)
+	return help.Styles{
+		Ellipsis:       desc,
+		ShortKey:       key,
+		ShortDesc:      desc,
+		ShortSeparator: desc,
+		FullKey:        key,
+		FullDesc:       desc,
+		FullSeparator:  desc,
+	}
 }

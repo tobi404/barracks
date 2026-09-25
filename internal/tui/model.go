@@ -189,6 +189,7 @@ func newModel(cfg Config) *model {
 		keys: defaultKeys(),
 		exec: tea.Exec,
 	}
+	m.help.Styles = m.th.help()
 	// The dossier scrolls vertically and only vertically. The viewport's own
 	// keymap also binds l/h (and the arrows) to a horizontal scroll, which the
 	// roster advertises nowhere and which cuts the first columns off every line
@@ -226,11 +227,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// roster is readable on a light background without a flag.
 		if m.cfg.Dark == nil {
 			m.th = newTheme(msg.IsDark())
+			m.help.Styles = m.th.help()
+			// The dossier was rendered into the viewport with the palette the
+			// roster opened on; without a re-layout it keeps that palette until
+			// the cursor moves.
+			m.layout()
 		}
 		return m, nil
 
 	case refreshedMsg:
 		m.st = msg.st
+		m.status = fmt.Sprintf("Mustered %d %s.", len(m.st.Units), plural(len(m.st.Units), "unit", "units"))
 		if m.cursor >= len(m.st.Units) {
 			m.cursor = maxInt(0, len(m.st.Units)-1)
 		}
