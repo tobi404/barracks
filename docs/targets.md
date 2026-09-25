@@ -54,8 +54,17 @@ repository has already garrisoned keeps the agents `barracks.lock` records for i
 must never quietly stop installing into an agent the repository has committed files for, and
 it says which agents it is reusing and why.
 
+A configuration directory barracks created itself, for a personal spawn into an agent the
+repository did not use yet, is not counted: while it holds nothing but that spawn's own
+symlinks it says nothing about the repository. Without that rule, one
+`spawn --target cursor` would send every loadout after it into Cursor as well, and a garrison
+would commit Cursor files for the whole team on the strength of a symlink nobody else can see.
+Once something else lives in that directory - the agent's own settings, or files you added -
+it counts like any other.
+
 When barracks decides for you - case 3 or 4 - it says so before it spawns, so a spawn never
-lands somewhere unexpected in silence.
+lands somewhere unexpected in silence. The roster's garrison card names the agents it will
+commit into, and why, before you confirm.
 
 Only `barracks run` - and [the roster](./roster.md)'s `L`, which starts the same session -
 contributes case 3's first half, because starting the agent is the only way barracks knows

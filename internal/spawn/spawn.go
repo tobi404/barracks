@@ -163,7 +163,8 @@ type Plan struct {
 }
 
 // Materialise ensures every source in the loadout is in the store and returns
-// the skills it contributes, with collisions rejected.
+// the skills it contributes. A skill two sources both provide refuses the
+// whole plan with a *loadout.CollisionError naming every such skill.
 //
 // sel narrows this deployment and nothing else. It is applied after each
 // source's own --only/--except - the loadout's filter says what the unit
@@ -171,7 +172,7 @@ type Plan struct {
 // check, so a deployment may name its way past a clash the definition has.
 func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string, sel skill.Selection) (Plan, error) {
 	var plan Plan
-	seen := map[string]string{}
+	var provided []loadout.Provision
 	available := map[string]bool{}
 
 	for _, eq := range l.Equipment {
@@ -201,11 +202,8 @@ func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string
 		if err != nil {
 			return Plan{}, err
 		}
+		provided = append(provided, loadout.Provision{Equipment: eq, Skills: skill.Names(selected)})
 		for _, s := range selected {
-			if prev, dup := seen[s.Name]; dup {
-				return Plan{}, fmt.Errorf("skill %q is provided by both %s and %s; use --only or --except to disambiguate", s.Name, prev, eq.Ident())
-			}
-			seen[s.Name] = eq.Ident()
 			plan.Skills = append(plan.Skills, Placed{
 				Name:   s.Name,
 				Path:   filepath.Join(dir, s.Name),
@@ -213,6 +211,9 @@ func (e *Engine) Materialise(ctx context.Context, l *loadout.Loadout, dir string
 				Source: eq.Ident(),
 			})
 		}
+	}
+	if clash := loadout.Collisions(l.Name, provided); clash != nil {
+		return Plan{}, clash
 	}
 	for name := range available {
 		plan.Available = append(plan.Available, name)

@@ -201,7 +201,7 @@ func (e *Engine) Install(ctx context.Context, req Request) (*Result, error) {
 // contributes, with the same collision rule a personal spawn uses.
 func (e *Engine) resolve(ctx context.Context, req Request) ([]placement, int, error) {
 	var places []placement
-	seen := map[string]string{}
+	var provided []loadout.Provision
 	fetched := 0
 
 	for _, eq := range req.Equipment {
@@ -223,13 +223,13 @@ func (e *Engine) resolve(ctx context.Context, req Request) ([]placement, int, er
 		if err != nil {
 			return nil, 0, err
 		}
+		provided = append(provided, loadout.Provision{Equipment: eq, Skills: skill.Names(found)})
 		for _, s := range found {
-			if prev, dup := seen[s.Name]; dup {
-				return nil, 0, fmt.Errorf("skill %q is provided by both %s and %s; use --only or --except to disambiguate", s.Name, prev, eq.Ident())
-			}
-			seen[s.Name] = eq.Ident()
 			places = append(places, placement{name: s.Name, source: eq.Ident(), storeDir: s.AbsPath})
 		}
+	}
+	if clash := loadout.Collisions(req.Name, provided); clash != nil {
+		return nil, 0, clash
 	}
 	if len(places) == 0 {
 		return nil, 0, fmt.Errorf("loadout %q has no skills to garrison; its sources contribute none", req.Name)

@@ -103,6 +103,14 @@ type Config struct {
 	// second would let a ticked box turn a broken definition into an explicit
 	// override that quietly succeeds.
 	Selection func(l *loadout.Loadout) (ids []string, reason string, err error)
+	// GarrisonTargets is where a garrison of this loadout would commit, and
+	// why - the answer `barracks garrison` prints, including the agents an
+	// existing garrison's lockfile records. The garrison card names them before
+	// anything is written, because those files are cloned by everyone and a
+	// destination nobody asked for is exactly what the card is there to catch.
+	//
+	// An error is a refusal, for the same reason it is one for Selection.
+	GarrisonTargets func(l *loadout.Loadout) (ids []string, reason string, err error)
 	// Launchers are the agent programs a run can start on this machine.
 	Launchers []Launcher
 
