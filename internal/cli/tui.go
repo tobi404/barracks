@@ -273,17 +273,26 @@ func (e *Env) tuiRecall(ctx context.Context, l *loadout.Loadout, committed bool)
 	out := tui.Outcome{Title: fmt.Sprintf("%s recalled", l.Name)}
 	found := false
 	if committed {
-		// Found the way the command finds it - the lockfile's own matching -
-		// and reported by the command's own renderer, captured.
+		// Found the way the command finds it - the lockfile's own matching. It
+		// is reported as a row beside the spawn rows below rather than in the
+		// command's sentence, which repeats the loadout the title already names
+		// and is wider than a card: cut there, it loses the lockfile clause,
+		// the one committed-tier fact the card exists to say.
 		for _, ref := range e.garrisonsHere(loc.Root, l.Name, false) {
 			rep, err := e.garrisons.Remove(loc.Root, ref)
 			if err != nil {
 				return tui.Outcome{Err: err, Notices: append(notices, e.capturedNotices()...)}
 			}
 			found = true
-			printGarrisonRemoval(e, rep)
+			out.Lines = append(out.Lines, fmt.Sprintf("garrison  %d %s removed, %s updated",
+				len(rep.Removed), plural(len(rep.Removed), "file", "files"), garrison.LockName))
+			for _, k := range rep.Kept {
+				notices = append(notices, fmt.Sprintf("left in place: %s - %s", k.Path, k.Reason))
+			}
+			for _, err := range rep.Errors {
+				notices = append(notices, err.Error())
+			}
 		}
-		out.Lines = append(out.Lines, e.capturedReport()...)
 	}
 	for _, ls := range lease.FindInScope(leases, loc.Scope, loc.Root) {
 		if ls.Loadout != l.Name {

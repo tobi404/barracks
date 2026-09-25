@@ -517,8 +517,11 @@ func TestRosterRemovesAGarrisonByName(t *testing.T) {
 	}
 
 	got = h.frame(120, 32, "r", "@type:frontline", "enter", "@pump")
-	if !strings.Contains(got, "recalled the frontline garrison (2 files removed") {
-		t.Errorf("the removal was not reported in the command's own words:\n%s", got)
+	// The whole line, lockfile clause included: it is the committed-tier fact
+	// the card exists to report, and a card is narrower than the command's
+	// own sentence.
+	if !strings.Contains(got, "garrison  2 files removed, barracks.lock updated") {
+		t.Errorf("the removal was not reported in full:\n%s", got)
 	}
 	if testutil.Exists(react) {
 		t.Error("the roster reported a garrison removal that did not happen")
