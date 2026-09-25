@@ -264,3 +264,54 @@ func mustParse(t *testing.T, raw string) Source {
 	}
 	return s
 }
+
+// Spelling is what barracks prints inside a command it suggests, so it has to
+// parse back to the same source from anywhere - which Ident cannot for a local
+// source, and a relative Raw cannot from another directory.
+func TestSpellingParsesBackToTheSameSource(t *testing.T) {
+	dir := t.TempDir()
+	for _, raw := range []string{
+		"gh:owner/skills",
+		"gh:owner/skills#v1.2.0",
+		"github.com/owner/mono#main:packages/skills",
+		"git@github.com:owner/skills.git#main",
+		dir + "/repo",
+		dir + "/repo#main:skills",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			src, err := Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			back, err := Parse(src.Spelling())
+			if err != nil {
+				t.Fatalf("Spelling %q does not parse: %v", src.Spelling(), err)
+			}
+			if back.Ident() != src.Ident() || back.CloneURL != src.CloneURL {
+				t.Errorf("Spelling %q parses to %s (%s), want %s (%s)",
+					src.Spelling(), back.Ident(), back.CloneURL, src.Ident(), src.CloneURL)
+			}
+		})
+	}
+}
+
+func TestSpellingOfARelativeLocalSourceIsAbsolute(t *testing.T) {
+	src, err := Parse("./skills#main:sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := src.Spelling(); got != src.CloneURL+"#main:sub" {
+		t.Errorf("Spelling = %q, want the absolute path %q with its ref and subpath", got, src.CloneURL)
+	}
+}
+
+func TestSpellingFollowsARewrittenRef(t *testing.T) {
+	src, err := Parse("gh:owner/skills#main:sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.Ref = "abc1234"
+	if got := src.Spelling(); got != "gh:owner/skills#abc1234:sub" {
+		t.Errorf("Spelling = %q, want the recorded ref rather than the one Raw was typed with", got)
+	}
+}

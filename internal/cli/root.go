@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tobi404/barracks/internal/loadout"
 )
 
 // Version is what `--version` prints. Main overwrites it with the line each
@@ -158,8 +161,23 @@ func Main(args []string, version string) int {
 		if ok := asExitError(err, &exit); ok {
 			return exit.Code
 		}
-		fmt.Fprintf(env.Err, "barracks: %v\n", err)
+		printError(env.Err, err)
 		return 1
 	}
 	return 0
+}
+
+// printError is how a failed command reaches the user on the command line.
+//
+// A collision's own message is worded for every surface; the flag advice below
+// it is the command line's alone, because the roster shows the same error and
+// has no flags to follow it with.
+func printError(w io.Writer, err error) {
+	fmt.Fprintf(w, "barracks: %v\n", err)
+	var clash *loadout.CollisionError
+	if errors.As(err, &clash) {
+		if hint := clash.EquipHint(); hint != "" {
+			fmt.Fprintf(w, "  or, %s\n", hint)
+		}
+	}
 }

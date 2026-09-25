@@ -217,23 +217,49 @@ func fromLocalPath(p string) (Source, error) {
 func (s Source) WithRef(ref string) Source {
 	out := s
 	out.Ref = ref
+	out.Raw = out.spell(rawBase(s.Raw))
+	return out
+}
 
-	base := s.Raw
-	if i := strings.Index(base, "#"); i >= 0 {
-		base = base[:i]
+// Spelling is a way of typing this source that Parse turns back into the same
+// Ident from any working directory, for a command barracks suggests the user
+// run.
+//
+// Ident itself is not one: a local source's Ident names a hash of its parent
+// directory, which Parse cannot read back, and Raw keeps a relative path exactly
+// as it was typed, which means something else from any other directory. So a
+// local source is spelled by the absolute path it was resolved to, and every
+// other one by the base the user gave, with the ref and subpath this entry
+// records rather than the ones Raw may still carry.
+func (s Source) Spelling() string {
+	base := rawBase(s.Raw)
+	if s.Host == HostLocal {
+		base = s.CloneURL
 	}
+	return s.spell(base)
+}
+
+// rawBase is raw without its "#ref" or "#ref:subpath" suffix.
+func rawBase(raw string) string {
+	if i := strings.Index(raw, "#"); i >= 0 {
+		return raw[:i]
+	}
+	return raw
+}
+
+// spell appends this source's ref and subpath to base in the form Parse reads.
+func (s Source) spell(base string) string {
 	b := &strings.Builder{}
 	b.WriteString(base)
-	if ref != "" || s.Subpath != "" {
+	if s.Ref != "" || s.Subpath != "" {
 		b.WriteString("#")
-		b.WriteString(ref)
+		b.WriteString(s.Ref)
 	}
 	if s.Subpath != "" {
 		b.WriteString(":")
 		b.WriteString(s.Subpath)
 	}
-	out.Raw = b.String()
-	return out
+	return b.String()
 }
 
 // StoreKey is the store-relative directory for this source at a given commit.

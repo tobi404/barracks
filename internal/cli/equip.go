@@ -41,7 +41,12 @@ Any form takes a "#ref" suffix to pin a branch, tag, or commit, and a
 Use --only and --except to take a few skills out of a large repo:
 
   barracks equip frontend gh:owner/skills --only 'react-*,css-*'
-  barracks equip frontend gh:owner/skills --except deprecated-helper`),
+  barracks equip frontend gh:owner/skills --except deprecated-helper
+
+A skill is installed under its name, so two sources may not both provide it.
+Equipping a source whose every skill the loadout already carries is refused -
+to switch to it, strip the old source first. A source that shares only some of
+them is equipped with a warning naming the --except that skips them.`),
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env.reap()
@@ -93,6 +98,14 @@ Use --only and --except to take a few skills out of a large repo:
 				Skills:     skill.Names(selected),
 				EquippedAt: env.now().UTC(),
 			}
+			// A skill two sources provide refuses every spawn and garrison of
+			// the loadout, so it is caught here, where the source that caused
+			// it is the one being typed. Nothing is saved when this source adds
+			// nothing the loadout does not already carry.
+			overlap := l.Overlap(eq)
+			if len(overlap) == distinctCount(eq.Skills) {
+				return fullOverlapError(l.Name, eq, overlap)
+			}
 			previous := l.Equip(eq)
 			if err := env.loadouts.Save(l); err != nil {
 				return err
@@ -116,6 +129,9 @@ Use --only and --except to take a few skills out of a large repo:
 			if skipped := len(found) - len(selected); skipped > 0 {
 				fmt.Fprintf(env.Out, "  (%d %s filtered out)\n", skipped, plural(skipped, "skill", "skills"))
 			}
+			if len(overlap) > 0 {
+				warnPartialOverlap(env, l.Name, eq, overlap)
+			}
 			return nil
 		},
 	}
@@ -129,4 +145,62 @@ func shortSHA(commit string) string {
 		return commit[:8]
 	}
 	return commit
+}
+
+// fullOverlapError refuses a source that would add nothing but clashes: every
+// skill it offers, another equipped source already provides. That is almost
+// always a retry - the same repository again with a subpath or a #ref - and the
+// way to switch to it is to strip the one it would clash with.
+func fullOverlapError(name string, eq loadout.Equipment, overlap []loadout.Collision) error {
+	var providers, strips []string
+	for _, p := range providersOf(overlap) {
+		providers = append(providers, p.Ident())
+		strips = append(strips, fmt.Sprintf("`barracks strip %s %s`", name, loadout.ShellArg(p.Spelling())))
+	}
+	return fmt.Errorf("every skill %s offers is already provided by %s: %s; a skill can come from one source only, so %s could not be deployed with both\nTo switch to %s, run %s first, then equip it again",
+		eq.Ident(), strings.Join(providers, " and "), loadout.ListNames(loadout.SkillsOf(overlap)),
+		name, eq.Ident(), strings.Join(strips, " and "))
+}
+
+// warnPartialOverlap reports the skills a newly equipped source shares with the
+// loadout's other equipment. The source is kept for the skills only it provides;
+// the shared ones would refuse every spawn and garrison until one side skips
+// them, and --except on this source is the repair that loses nothing.
+func warnPartialOverlap(env *Env, name string, eq loadout.Equipment, overlap []loadout.Collision) {
+	shared := loadout.SkillsOf(overlap)
+	var providers []string
+	for _, p := range providersOf(overlap) {
+		providers = append(providers, p.Ident())
+	}
+	fmt.Fprintf(env.Err, "! %d %s %s offers %s also provided by %s: %s\n",
+		len(shared), plural(len(shared), "skill", "skills"), eq.Ident(), plural(len(shared), "is", "are"),
+		strings.Join(providers, " and "), loadout.ListNames(shared))
+	fmt.Fprintf(env.Err, "  a skill can come from one source only, so %s cannot be deployed until one side skips %s:\n  %s\n",
+		name, plural(len(shared), "it", "them"), loadout.ReEquipCommand(name, eq, shared))
+}
+
+// providersOf is every already-equipped source in overlap, once each, in the
+// order they first provide a shared skill. Overlap lists the new source last.
+func providersOf(overlap []loadout.Collision) []loadout.Equipment {
+	var out []loadout.Equipment
+	seen := map[string]bool{}
+	for _, c := range overlap {
+		for _, p := range c.Sources[:len(c.Sources)-1] {
+			if !seen[p.Ident()] {
+				seen[p.Ident()] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// distinctCount is how many different names are in names. One source may hold
+// two directories of the same name, and Overlap reports each name once.
+func distinctCount(names []string) int {
+	seen := map[string]bool{}
+	for _, n := range names {
+		seen[n] = true
+	}
+	return len(seen)
 }

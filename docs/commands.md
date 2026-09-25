@@ -57,7 +57,12 @@ a glob, so a skill really called `report[1]` can be selected by its own name.
 
 Equipping a source a loadout already has re-pins it to the newly resolved commit instead of
 attaching a second copy. A different `#ref` or subpath is a different source and is kept
-alongside. To move a whole loadout forward later, and every repo it is spawned into with it,
+alongside - but a skill is installed under its name, so two sources may not both provide
+it. `equip` refuses a source whose every skill the loadout already carries (the repository
+root, then the same repository again by its subpath) and names the `barracks strip` that
+switches to it. A source that shares only some skills is equipped with a warning naming the
+`--except` that skips them; until one side does, `spawn` and `garrison` refuse the loadout
+and list every shared skill. To move a whole loadout forward later, and every repo it is spawned into with it,
 use [`barracks upgrade`](#barracks-upgrade-loadout); to take one back out again, use
 [`barracks strip`](#barracks-strip-loadout-source).
 
