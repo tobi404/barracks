@@ -273,8 +273,8 @@ Exits non-zero when anything does not match, so it can gate a build.`),
 				if !c.OK() {
 					state = fmt.Sprintf("%d %s", len(c.Findings), plural(len(c.Findings), "problem", "problems"))
 				}
-				fmt.Fprintf(env.Out, "%s  %d %s, %d %s  [%s]  %s\n",
-					g.Loadout, g.SkillCount(), plural(g.SkillCount(), "skill", "skills"),
+				fmt.Fprintf(env.Out, "%s  %s, %d %s  [%s]  %s\n",
+					g.Loadout, g.Strength(),
 					g.FileCount(), plural(g.FileCount(), "file", "files"),
 					strings.Join(g.Targets, ", "), state)
 				// The name above is a label; this is what the entry is really
