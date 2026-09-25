@@ -202,8 +202,13 @@ func newModel(cfg Config) *model {
 	return m
 }
 
-// refreshedMsg carries a re-read of every record back to the model.
-type refreshedMsg struct{ st state }
+// refreshedMsg carries a re-read of every record back to the model. mustered
+// is set only when the re-read was asked for with R, the one refresh the status
+// line announces.
+type refreshedMsg struct {
+	st       state
+	mustered bool
+}
 
 // doneMsg is an action's result. It carries a Preview rather than an Outcome
 // because the two arrive the same way and differ only in whether there is
@@ -237,7 +242,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case refreshedMsg:
 		m.st = msg.st
-		m.status = fmt.Sprintf("Mustered %d %s.", len(m.st.Units), plural(len(m.st.Units), "unit", "units"))
+		if msg.mustered {
+			m.status = fmt.Sprintf("Mustered %d %s.", len(m.st.Units), plural(len(m.st.Units), "unit", "units"))
+		}
 		if m.cursor >= len(m.st.Units) {
 			m.cursor = maxInt(0, len(m.st.Units)-1)
 		}
@@ -254,7 +261,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.scr = screenOutcome
-		return m, m.refresh()
+		return m, m.refresh(false)
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
@@ -338,7 +345,7 @@ func (m *model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.scr = screenHelp
 	case key.Matches(msg, m.keys.Refresh):
 		m.status = "Mustering."
-		return m.refresh()
+		return m.refresh(true)
 	case key.Matches(msg, m.keys.Deploy):
 		return m.propose(orderDeploy)
 	case key.Matches(msg, m.keys.Recall):
@@ -599,9 +606,9 @@ func (m *model) launcher() Launcher {
 	return Launcher{}
 }
 
-func (m *model) refresh() tea.Cmd {
+func (m *model) refresh(mustered bool) tea.Cmd {
 	records := m.cfg.Records
-	return func() tea.Msg { return refreshedMsg{gather(records)} }
+	return func() tea.Msg { return refreshedMsg{st: gather(records), mustered: mustered} }
 }
 
 func (m *model) move(d int) {

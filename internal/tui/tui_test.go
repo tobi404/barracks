@@ -1013,6 +1013,19 @@ func TestRefreshRereadsTheRecords(t *testing.T) {
 	}
 }
 
+// Every finished order re-reads the records too, but only R is a muster: the
+// status line must not announce one the user never asked for.
+func TestOnlyRAnnouncesAMuster(t *testing.T) {
+	r := fakeRecords{root: "/repo/lab", leases: []*lease.Lease{spawnedLease("frontline", "/repo/lab", "/repo/lab/.claude/skills", 1)},
+		loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
+	cfg := cfgFor(r)
+	cfg.Recall = func(context.Context, *loadout.Loadout) Outcome { return Outcome{Title: "frontline recalled"} }
+	got := plain(Frame(cfg, 110, 30, "r", "y", "@pump", "esc"))
+	if strings.Contains(got, "FRONTLINE RECALLED") || strings.Contains(got, "Mustered") {
+		t.Errorf("an order's re-read announced a muster:\n%s", got)
+	}
+}
+
 // The palette is settled by the terminal rather than guessed, so the roster is
 // readable on a light background without a flag.
 func TestBackgroundColourPicksThePalette(t *testing.T) {
