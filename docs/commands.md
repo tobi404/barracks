@@ -244,7 +244,7 @@ barracks inspect
 ```
 
 ```text
-frontend  3 skills, 5 files  [claude, cursor]  3 problems
+frontend  3 skills x 2 agents, 7 files  [claude, cursor]  3 problems
   identity: 940f8b3821e4c07d
   ! .claude/skills/css/SKILL.md: missing
   ! .claude/skills/react/SKILL.md: modified
