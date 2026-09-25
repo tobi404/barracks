@@ -91,6 +91,19 @@ type Config struct {
 	// life, which is what Session is for.
 	Launch func(ctx context.Context, l *loadout.Loadout, program Launcher, s Session) Outcome
 
+	// Train creates a loadout, exactly as `barracks train <name>` does. It
+	// writes one definition and fetches nothing, so it keeps the screen.
+	Train func(ctx context.Context, name string) Outcome
+	// CheckSource answers whether raw is a source `barracks equip` would
+	// accept, from its spelling alone and without fetching anything. The equip
+	// order asks it before handing the terminal over, so a typo is refused on
+	// the prompt it was typed into rather than after the screen has stepped
+	// aside and come back.
+	CheckSource func(raw string) error
+	// Equip attaches a source to a loadout, exactly as `barracks equip` does.
+	// It fetches, so it runs with the terminal handed back, like a deploy.
+	Equip func(ctx context.Context, l *loadout.Loadout, source string, s Session) Outcome
+
 	// Targets is every agent barracks can deploy to, in the order the picker
 	// offers them.
 	Targets []TargetOption

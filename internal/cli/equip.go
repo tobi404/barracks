@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -50,94 +51,114 @@ them is equipped with a warning naming the --except that skips them.`),
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env.reap()
-			name, raw := args[0], args[1]
-
-			l, err := env.loadouts.Get(name)
-			if err != nil {
-				return err
-			}
-			src, err := source.Parse(raw)
-			if err != nil {
-				return err
-			}
-			if err := src.Validate(); err != nil {
-				return err
-			}
-
-			ctx := cmd.Context()
-			commit, err := env.store.Resolve(ctx, src)
-			if err != nil {
-				return err
-			}
-			dir, fetched, err := env.store.Ensure(ctx, src, commit)
-			if err != nil {
-				return err
-			}
-
-			found, err := skill.Discover(dir, src.Subpath)
-			if err != nil {
-				return fmt.Errorf("scan %s: %w", src.Ident(), err)
-			}
-			selected, err := skill.Filter(found, only, except)
-			if err != nil {
-				return err
-			}
-			if len(selected) == 0 {
-				if len(found) == 0 {
-					return fmt.Errorf("no skills found in %s (looked for directories containing %s)", src.Ident(), skill.Manifest)
-				}
-				return fmt.Errorf("filters matched none of the %d skills in %s: %s",
-					len(found), src.Ident(), strings.Join(skill.Names(found), ", "))
-			}
-
-			eq := loadout.Equipment{
-				Source:     src,
-				Commit:     commit,
-				Only:       only,
-				Except:     except,
-				Skills:     skill.Names(selected),
-				EquippedAt: env.now().UTC(),
-			}
-			// A skill two sources provide refuses every spawn and garrison of
-			// the loadout, so it is caught here, where the source that caused
-			// it is the one being typed. Nothing is saved when this source adds
-			// nothing the loadout does not already carry.
-			overlap := l.Overlap(eq)
-			if len(overlap) == distinctCount(eq.Skills) {
-				return fullOverlapError(l.Name, eq, overlap)
-			}
-			previous := l.Equip(eq)
-			if err := env.loadouts.Save(l); err != nil {
-				return err
-			}
-
-			verb := "reused cached"
-			if fetched {
-				verb = "fetched"
-			}
-			switch {
-			case previous == nil:
-				fmt.Fprintf(env.Out, "equipped %s with %s@%s (%s source)\n", l.Name, src.Ident(), shortSHA(commit), verb)
-			case previous.Commit == commit:
-				fmt.Fprintf(env.Out, "%s was already equipped with %s, still pinned at %s\n", l.Name, src.Ident(), shortSHA(commit))
-			default:
-				fmt.Fprintf(env.Out, "%s was already equipped with %s, re-pinned %s -> %s\n", l.Name, src.Ident(), shortSHA(previous.Commit), shortSHA(commit))
-			}
-			for _, s := range selected {
-				fmt.Fprintf(env.Out, "  + %s\n", s.Name)
-			}
-			if skipped := len(found) - len(selected); skipped > 0 {
-				fmt.Fprintf(env.Out, "  (%d %s filtered out)\n", skipped, plural(skipped, "skill", "skills"))
-			}
-			if len(overlap) > 0 {
-				warnPartialOverlap(env, l.Name, eq, overlap)
-			}
-			return nil
+			return env.equip(cmd.Context(), args[0], args[1], only, except)
 		},
 	}
 	cmd.Flags().StringSliceVar(&only, "only", nil, "take only skills matching these glob patterns")
 	cmd.Flags().StringSliceVar(&except, "except", nil, "skip skills matching these glob patterns")
 	return cmd
+}
+
+// equip attaches a source to a loadout and reports what it carried in. It is
+// the whole of `barracks equip`, and the roster's equip order runs exactly this,
+// so the two surfaces share one set of rules about what may be equipped.
+//
+// The loadout is read back by name rather than taken from a caller's copy: a
+// definition held on a screen may be older than the one on disk, and saving
+// the stale one over it would silently drop whatever changed in between.
+func (e *Env) equip(ctx context.Context, name, raw string, only, except []string) error {
+	l, err := e.loadouts.Get(name)
+	if err != nil {
+		return err
+	}
+	src, err := parseSource(raw)
+	if err != nil {
+		return err
+	}
+
+	commit, err := e.store.Resolve(ctx, src)
+	if err != nil {
+		return err
+	}
+	dir, fetched, err := e.store.Ensure(ctx, src, commit)
+	if err != nil {
+		return err
+	}
+
+	found, err := skill.Discover(dir, src.Subpath)
+	if err != nil {
+		return fmt.Errorf("scan %s: %w", src.Ident(), err)
+	}
+	selected, err := skill.Filter(found, only, except)
+	if err != nil {
+		return err
+	}
+	if len(selected) == 0 {
+		if len(found) == 0 {
+			return fmt.Errorf("no skills found in %s (looked for directories containing %s)", src.Ident(), skill.Manifest)
+		}
+		return fmt.Errorf("filters matched none of the %d skills in %s: %s",
+			len(found), src.Ident(), strings.Join(skill.Names(found), ", "))
+	}
+
+	eq := loadout.Equipment{
+		Source:     src,
+		Commit:     commit,
+		Only:       only,
+		Except:     except,
+		Skills:     skill.Names(selected),
+		EquippedAt: e.now().UTC(),
+	}
+	// A skill two sources provide refuses every spawn and garrison of
+	// the loadout, so it is caught here, where the source that caused
+	// it is the one being typed. Nothing is saved when this source adds
+	// nothing the loadout does not already carry.
+	overlap := l.Overlap(eq)
+	if len(overlap) == distinctCount(eq.Skills) {
+		return fullOverlapError(l.Name, eq, overlap)
+	}
+	previous := l.Equip(eq)
+	if err := e.loadouts.Save(l); err != nil {
+		return err
+	}
+
+	verb := "reused cached"
+	if fetched {
+		verb = "fetched"
+	}
+	switch {
+	case previous == nil:
+		fmt.Fprintf(e.Out, "equipped %s with %s@%s (%s source)\n", l.Name, src.Ident(), shortSHA(commit), verb)
+	case previous.Commit == commit:
+		fmt.Fprintf(e.Out, "%s was already equipped with %s, still pinned at %s\n", l.Name, src.Ident(), shortSHA(commit))
+	default:
+		fmt.Fprintf(e.Out, "%s was already equipped with %s, re-pinned %s -> %s\n", l.Name, src.Ident(), shortSHA(previous.Commit), shortSHA(commit))
+	}
+	for _, s := range selected {
+		fmt.Fprintf(e.Out, "  + %s\n", s.Name)
+	}
+	if skipped := len(found) - len(selected); skipped > 0 {
+		fmt.Fprintf(e.Out, "  (%d %s filtered out)\n", skipped, plural(skipped, "skill", "skills"))
+	}
+	if len(overlap) > 0 {
+		warnPartialOverlap(e, l.Name, eq, overlap)
+	}
+	return nil
+}
+
+// parseSource is the source syntax `barracks equip` accepts, and the only
+// statement of it: the roster asks the same question before it hands the
+// terminal over for a fetch, so a typo is answered on the prompt it was typed
+// into rather than after the screen has stepped aside.
+func parseSource(raw string) (source.Source, error) {
+	src, err := source.Parse(raw)
+	if err != nil {
+		return source.Source{}, err
+	}
+	if err := src.Validate(); err != nil {
+		return source.Source{}, err
+	}
+	return src, nil
 }
 
 func shortSHA(commit string) string {

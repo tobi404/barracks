@@ -577,10 +577,11 @@ func TestRosterMovesAndCancels(t *testing.T) {
 		t.Errorf("? did not open the orders overlay:\n%s", got)
 	}
 	// A key nothing is bound to leaves the screen alone. The roster advertises
-	// no verb it cannot carry out, so the loadout-editing verbs - train, equip,
-	// strip, rename - have no key at all rather than one that explains itself.
+	// no verb it cannot carry out, so the loadout-editing verbs it does not
+	// drive - strip and rename - have no key at all rather than one that
+	// explains itself.
 	idle := h.frame(120, 32)
-	for _, k := range []string{"t", "e", "x", "z", "w"} {
+	for _, k := range []string{"t", "x", "z", "w"} {
 		if got := h.frame(120, 32, k); got != idle {
 			t.Errorf("%q is bound to something the roster does not advertise:\n%s", k, got)
 		}
