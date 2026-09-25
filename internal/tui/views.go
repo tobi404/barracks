@@ -191,7 +191,7 @@ func (m *model) rosterPane() string {
 	rows = append(rows, m.th.label.Render(
 		pad("", colMarker)+pad("UNIT", nameW)+pad("SRC", colSources)+pad("SKL", colSkills)+"POSTURE"))
 	if len(m.st.Units) == 0 {
-		rows = append(rows, m.th.faint.Render(truncate("(no units trained - barracks train <name>)", inner)))
+		rows = append(rows, m.th.faint.Render(truncate("(none - press n to train)", inner)))
 	}
 
 	// The pane is a fixed height, so only a window of the roster is drawn and
@@ -319,7 +319,7 @@ func (m *model) dossier(u unit, w int) string {
 
 	fmt.Fprintln(&b, m.th.label.Render("EQUIPMENT"))
 	if len(l.Equipment) == 0 {
-		fmt.Fprintln(&b, m.th.faint.Render("  nothing issued - barracks equip "+l.Name+" <source>"))
+		fmt.Fprintln(&b, m.th.faint.Render("  none - press e to equip"))
 	}
 	for _, eq := range l.Equipment {
 		fmt.Fprintf(&b, "  %s %s\n", m.th.body.Render("▪"), m.th.body.Render(truncate(eq.Ident(), w-4)))
@@ -412,6 +412,8 @@ func (m *model) overlay() string {
 		return m.outcomeModal()
 	case screenHelp:
 		return m.helpModal()
+	case screenPrompt:
+		return m.promptModal()
 	}
 	return ""
 }

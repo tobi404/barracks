@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 )
@@ -26,6 +27,7 @@ const (
 	screenPreview
 	screenOutcome
 	screenHelp
+	screenPrompt
 )
 
 // order is what a confirmed modal is about to do.
@@ -42,6 +44,8 @@ const (
 	// `barracks recall <loadout>`, garrison and all. It is only ever given from
 	// the typed card.
 	orderRemoveGarrison
+	orderTrain
+	orderEquip
 )
 
 func (o order) verb() string {
@@ -58,6 +62,10 @@ func (o order) verb() string {
 		return "Launch"
 	case orderRemoveGarrison:
 		return "Remove"
+	case orderTrain:
+		return "Train"
+	case orderEquip:
+		return "Equip"
 	default:
 		return ""
 	}
@@ -77,6 +85,10 @@ func (o order) working() string {
 		return "STANDING DOWN"
 	case orderRemoveGarrison:
 		return "BREAKING CAMP"
+	case orderTrain:
+		return "ENLISTING"
+	case orderEquip:
+		return "ISSUING KIT"
 	default:
 		return "MOVING OUT"
 	}
@@ -117,6 +129,14 @@ type model struct {
 	// shown as an order the roster cannot then carry out.
 	apply  func(context.Context, Session) Outcome
 	status string
+	// input is the one field the train and equip orders ask for. It keeps what
+	// was typed when an order is refused, so a typo is corrected rather than
+	// typed out again.
+	input textinput.Model
+	// follow is the unit the cursor should land on when the next re-read
+	// arrives - the one just trained, which the re-read is what brings onto the
+	// roster at all.
+	follow string
 
 	sp   spinner.Model
 	vp   viewport.Model
@@ -138,6 +158,8 @@ type keymap struct {
 	Garrison key.Binding
 	Upgrade  key.Binding
 	Launch   key.Binding
+	New      key.Binding
+	Equip    key.Binding
 	Refresh  key.Binding
 	Help     key.Binding
 	Quit     key.Binding
@@ -155,6 +177,8 @@ func defaultKeys() keymap {
 		Garrison: key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "garrison")),
 		Upgrade:  key.NewBinding(key.WithKeys("u"), key.WithHelp("u", "upgrade")),
 		Launch:   key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "launch an agent")),
+		New:      key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new loadout")),
+		Equip:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "equip")),
 		Refresh:  key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "muster again")),
 		Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "orders")),
 		Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "dismissed")),
@@ -164,11 +188,13 @@ func defaultKeys() keymap {
 	}
 }
 
-// The loadout-editing verbs - train, equip, strip, rename - deliberately have
-// no binding at all. A key that answers "not in this build" still advertises
-// itself in the help and still has to be explained; a key that is not there is
-// the honest shape of a surface that does not do the thing. Those verbs remain
-// commands until somebody asks twice.
+// Two of the loadout-editing verbs are here - train and equip - because
+// without them the roster sent every first-time user back to the shell: an
+// empty roster, and every unit that carries nothing, could only be answered at
+// the prompt. strip and rename deliberately have no binding at all. A key that
+// answers "not in this build" still advertises itself in the help and still
+// has to be explained; a key that is not there is the honest shape of a surface
+// that does not do the thing.
 
 // ShortHelp is the footer bar, and its order is the whole point of it.
 //
@@ -180,14 +206,17 @@ func defaultKeys() keymap {
 // puts `q dismissed` at the left edge, which is not where a footer conventionally
 // ends: that is the trade, and it is deliberate.
 func (k keymap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Quit, k.Help, k.Deploy, k.Recall, k.Garrison, k.Upgrade, k.Launch, k.Refresh, k.Up, k.Down}
+	return []key.Binding{k.Quit, k.Help, k.Deploy, k.Recall, k.Garrison, k.Upgrade, k.Launch, k.New, k.Equip, k.Refresh, k.Up, k.Down}
 }
 
 func (k keymap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Refresh},
-		{k.Deploy, k.Recall, k.Garrison},
-		{k.Upgrade, k.Launch},
+		// n and e share columns the deploy verbs already had room in rather
+		// than adding one: every column added here is one more that a narrow
+		// terminal drops off the right of this card.
+		{k.Deploy, k.Recall, k.Garrison, k.Upgrade},
+		{k.Launch, k.New, k.Equip},
 		{k.Choose, k.Confirm, k.Cancel},
 		{k.Help, k.Quit},
 	}
@@ -199,13 +228,14 @@ func newModel(cfg Config) *model {
 		dark = *cfg.Dark
 	}
 	m := &model{
-		cfg:  cfg,
-		th:   newTheme(dark),
-		sp:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		vp:   viewport.New(),
-		help: help.New(),
-		keys: defaultKeys(),
-		exec: tea.Exec,
+		cfg:   cfg,
+		th:    newTheme(dark),
+		sp:    spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		vp:    viewport.New(),
+		help:  help.New(),
+		keys:  defaultKeys(),
+		exec:  tea.Exec,
+		input: textinput.New(),
 	}
 	m.help.Styles = m.th.help()
 	// The dossier scrolls vertically and only vertically. The viewport's own
@@ -251,6 +281,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cfg.Dark == nil {
 			m.th = newTheme(msg.IsDark())
 			m.help.Styles = m.th.help()
+			m.styleInput()
 			// The dossier was rendered into the viewport with the palette the
 			// roster opened on; without a re-layout it keeps that palette until
 			// the cursor moves.
@@ -266,8 +297,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.st.Units) {
 			m.cursor = maxInt(0, len(m.st.Units)-1)
 		}
+		m.land(m.follow)
+		m.follow = ""
 		m.layout()
 		return m, nil
+
+	case promptedMsg:
+		return m, m.prompted(msg)
 
 	case doneMsg:
 		m.result = msg.p.Outcome
@@ -291,16 +327,30 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		// A pasted name is as good as a typed one - it is still the name, spelled
-		// out, and not a key brushed by accident. Anywhere else a paste means
-		// nothing and is dropped rather than handed to the dossier.
-		if m.scr == screenTyped {
+		// out, and not a key brushed by accident. The prompt's field takes a
+		// paste as text too. Anywhere else a paste means nothing and is dropped
+		// rather than handed to the dossier: pasting into the roster must not
+		// become a key press.
+		switch m.scr {
+		case screenTyped:
 			m.typed += strings.TrimSpace(msg.Content)
 			m.note = ""
+		case screenPrompt:
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			m.note = ""
+			return m, cmd
 		}
 		return m, nil
 	}
 
 	var cmd tea.Cmd
+	if m.scr == screenPrompt {
+		// The field's own messages - a clipboard read it asked for - come back
+		// through here, and are its to handle rather than the dossier's.
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
 }
@@ -370,6 +420,9 @@ func (m *model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 	case screenHelp:
 		m.scr = screenRoster
 		return nil
+
+	case screenPrompt:
+		return m.onPromptKey(msg)
 	}
 
 	switch {
@@ -394,6 +447,10 @@ func (m *model) onKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.propose(orderUpgrade)
 	case key.Matches(msg, m.keys.Launch):
 		return m.propose(orderLaunch)
+	case key.Matches(msg, m.keys.New):
+		return m.ask(orderTrain)
+	case key.Matches(msg, m.keys.Equip):
+		return m.ask(orderEquip)
 	default:
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
@@ -462,7 +519,7 @@ func (m *model) onTyped(msg tea.KeyPressMsg) tea.Cmd {
 func (m *model) propose(o order) tea.Cmd {
 	u, ok := m.selected()
 	if !ok {
-		m.status = "No unit selected."
+		m.status = m.nothingSelected()
 		return nil
 	}
 	if reason := m.refuse(o, u); reason != "" {
@@ -512,7 +569,7 @@ func (m *model) refuse(o order, u unit) string {
 	if len(u.Loadout.Equipment) == 0 {
 		switch o {
 		case orderDeploy, orderGarrison, orderUpgrade, orderLaunch:
-			return fmt.Sprintf("%s carries nothing - equip it first.", u.Loadout.Name)
+			return fmt.Sprintf("%s carries nothing - press e to equip it.", u.Loadout.Name)
 		}
 	}
 	switch o {
@@ -769,6 +826,7 @@ func (m *model) layout() {
 	// is what makes the frame wider than the terminal - which costs the user
 	// the end of it, where `q dismissed` is.
 	m.help.SetWidth(maxInt(1, m.w-2))
+	m.sizeInput()
 	// The pane is a border (2 rows), a title line, and the viewport. Getting
 	// this wrong by one makes the two panes end on different rows, which is the
 	// first thing the eye catches.
@@ -777,7 +835,7 @@ func (m *model) layout() {
 	if u, ok := m.selected(); ok {
 		m.vp.SetContent(m.dossier(u, maxInt(1, w-4)))
 	} else {
-		m.vp.SetContent(m.th.faint.Render("No units on the roster.\n\nTrain one with:  barracks train <name>"))
+		m.vp.SetContent(m.th.faint.Render("No units on the roster.\n\nPress n to train one."))
 	}
 }
 

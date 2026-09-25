@@ -90,6 +90,16 @@ func (e *Env) tuiConfig(ctx context.Context) tui.Config {
 		Launch: func(ctx context.Context, l *loadout.Loadout, program tui.Launcher, s tui.Session) tui.Outcome {
 			return e.tuiLaunch(ctx, l, program, s)
 		},
+		Train: func(ctx context.Context, name string) tui.Outcome {
+			return e.tuiTrain(name)
+		},
+		CheckSource: func(raw string) error {
+			_, err := parseSource(raw)
+			return err
+		},
+		Equip: func(ctx context.Context, l *loadout.Loadout, source string, s tui.Session) tui.Outcome {
+			return e.tuiEquip(ctx, l, source, s)
+		},
 	}
 }
 
@@ -468,6 +478,45 @@ func (e *Env) tuiLaunch(ctx context.Context, l *loadout.Loadout, program tui.Lau
 		out.Lines = append(out.Lines, fmt.Sprintf("%s exited with status %d", program.Command, code))
 	}
 	return out
+}
+
+// tuiTrain is `barracks train <name>` from the roster: the command's own path,
+// with nothing declared, because a prompt with one field has nothing else to
+// give it. Its report is captured and not shown - the roster says what matters
+// of it in keys rather than in the command line the report ends by naming, and
+// the new unit's dossier says the rest.
+func (e *Env) tuiTrain(name string) tui.Outcome {
+	restore := e.captureStreams()
+	defer restore()
+
+	l, err := e.train(name, "", nil)
+	if err != nil {
+		return tui.Outcome{Err: err, Notices: e.capturedNotices()}
+	}
+	return tui.Outcome{
+		Title:   fmt.Sprintf("%s trained", l.Name),
+		Lines:   e.capturedReport(),
+		Notices: e.capturedNotices(),
+	}
+}
+
+// tuiEquip is `barracks equip <loadout> <source>` from the roster, through the
+// command's own path, so every rule about what may be equipped applies here
+// without being restated. It fetches, so the roster runs it with the terminal
+// handed back, exactly as it runs a deploy.
+func (e *Env) tuiEquip(ctx context.Context, l *loadout.Loadout, raw string, s tui.Session) tui.Outcome {
+	restore := e.captureStreams()
+	defer restore()
+	defer e.reportTo(s)()
+
+	if err := e.equip(ctx, l.Name, raw, nil, nil); err != nil {
+		return tui.Outcome{Err: err, Notices: e.capturedNotices()}
+	}
+	return tui.Outcome{
+		Title:   fmt.Sprintf("%s equipped", l.Name),
+		Lines:   e.capturedReport(),
+		Notices: e.capturedNotices(),
+	}
 }
 
 // reportTo points the store's progress reporter at the terminal an order has

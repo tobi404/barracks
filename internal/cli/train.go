@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tobi404/barracks/internal/loadout"
 )
 
 func newTrainCmd(env *Env) *cobra.Command {
@@ -35,32 +36,41 @@ The definition is a plain YAML file you are welcome to open and edit by hand.
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env.reap()
-			name := args[0]
-			// Resolve before creating: a loadout left holding a target barracks
-			// cannot resolve would only fail later, at spawn time.
-			declared, err := declaredIDs(targetIDs)
-			if err != nil {
+			if _, err := env.train(args[0], description, targetIDs); err != nil {
 				return err
 			}
-			l, err := env.loadouts.Create(name, description, env.now())
-			if err != nil {
-				return err
-			}
-			if len(declared) > 0 {
-				l.SetTargets(declared)
-				if err := env.loadouts.Save(l); err != nil {
-					return err
-				}
-			}
-			fmt.Fprintf(env.Out, "trained loadout %q\n", l.Name)
-			printAssignment(env, l)
-			fmt.Fprintf(env.Out, "  equip it with:  barracks equip %s gh:owner/repo\n", l.Name)
+			fmt.Fprintf(env.Out, "  equip it with:  barracks equip %s gh:owner/repo\n", args[0])
 			return nil
 		},
 	}
 	cmd.Flags().StringVarP(&description, "description", "d", "", "what this loadout is for")
 	cmd.Flags().StringSliceVar(&targetIDs, "target", nil, targetFlagHelp("install into"))
 	return cmd
+}
+
+// train creates a loadout and reports what it declared. It is the whole of
+// `barracks train` bar the closing hint, which names the next command to type:
+// the roster runs this same path and says the same thing in keys instead.
+func (e *Env) train(name, description string, targetIDs []string) (*loadout.Loadout, error) {
+	// Resolve before creating: a loadout left holding a target barracks cannot
+	// resolve would only fail later, at spawn time.
+	declared, err := declaredIDs(targetIDs)
+	if err != nil {
+		return nil, err
+	}
+	l, err := e.loadouts.Create(name, description, e.now())
+	if err != nil {
+		return nil, err
+	}
+	if len(declared) > 0 {
+		l.SetTargets(declared)
+		if err := e.loadouts.Save(l); err != nil {
+			return nil, err
+		}
+	}
+	fmt.Fprintf(e.Out, "trained loadout %q\n", l.Name)
+	printAssignment(e, l)
+	return l, nil
 }
 
 func newDisbandCmd(env *Env) *cobra.Command {

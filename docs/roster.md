@@ -60,6 +60,22 @@ same plan - and nothing moves until you say so. Standing it down leaves everythi
 agent exits, exactly as `barracks run` does. It offers the agents barracks knows that are
 actually installed here.
 
+You can also fill the roster from it. `n` trains a new loadout and `e` equips the unit under
+the cursor with a source; each opens a card with one field, and each runs the same code as
+the command it stands for - `barracks train <name>` and `barracks equip <loadout> <source>` -
+so a unit trained or equipped here is indistinguishable from one made at the prompt. The
+source takes exactly what `equip` takes, `#ref` and `#ref:subpath` included (see
+[source syntax](./commands.md#source-syntax)).
+
+Press `enter` to send the field and `esc` (or `Ctrl-C`) to stand it down; every other key is
+text, so a name may contain any letter the roster otherwise uses as a key. Anything barracks
+refuses - a name that is not allowed or is already taken, a source it cannot read, a ref or
+repository it cannot fetch - is said on the card itself, with what you typed still in the
+field to be corrected. A newly trained unit lands under the cursor, ready for `e`. An equip
+fetches, so it hands the terminal back exactly as a deploy does (below). A unit trained here
+declares no targets and has no description; `barracks assign` and the definition file set
+those.
+
 Any of these may have to fetch, and a fetch can ask you something barracks cannot answer for
 you - an SSH key passphrase, a host-key confirmation, a credential helper wanting a password.
 An agent needs the keyboard outright. So the roster hands the terminal back for the whole
@@ -77,6 +93,8 @@ is the one state this tier must never be left in.
 | `g` | garrison it into this repository |
 | `u` | plan an upgrade of its sources, then carry it out |
 | `L` | run an agent with it, and recall it when the agent exits |
+| `n` | train a new loadout |
+| `e` | equip the selected unit with a source |
 | `space` | choose, on an order that offers a choice |
 | `R` | re-read every record |
 | `?` | the orders overlay |
@@ -91,8 +109,8 @@ exactly and pressed `enter`. `esc` stands it down. That card recalls the unit's 
 too, exactly as `barracks recall <loadout>` does. A unit that is only garrisoned here goes
 straight to that card.
 
-The roster does not train, equip, strip or rename. Those stay commands, and no key is bound
-to them - a key that announces it does not work is still a key you have to learn.
+The roster does not strip or rename. Those stay commands, and no key is bound to them - a key
+that announces it does not work is still a key you have to learn.
 
 **Bare `barracks` opens the roster only when stdout is a terminal.** Anywhere else - a pipe,
 a redirect, a CI job - `barracks` prints the help it has always printed plus the one line for

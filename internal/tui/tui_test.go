@@ -135,6 +135,19 @@ func withActions(cfg Config) Config {
 	cfg.Launch = func(_ context.Context, l *loadout.Loadout, p Launcher, _ Session) Outcome {
 		return Outcome{Title: l.Name + " session ended", Lines: []string{"ran " + p.Command}}
 	}
+	cfg.Train = func(_ context.Context, name string) Outcome {
+		if err := loadout.ValidateName(name); err != nil {
+			return Outcome{Err: err}
+		}
+		return Outcome{Title: name + " trained"}
+	}
+	cfg.CheckSource = func(raw string) error {
+		_, err := source.Parse(raw)
+		return err
+	}
+	cfg.Equip = func(_ context.Context, l *loadout.Loadout, raw string, _ Session) Outcome {
+		return Outcome{Title: l.Name + " equipped", Lines: []string{"equipped with " + raw}}
+	}
 	return cfg
 }
 
@@ -279,11 +292,16 @@ func TestRosterOutsideARepository(t *testing.T) {
 
 func TestEmptyRosterSaysHowToFillIt(t *testing.T) {
 	got := plain(Frame(cfgFor(fakeRecords{root: "/repo"}), 100, 24, "s", "r"))
-	if !strings.Contains(got, "no units trained") || !strings.Contains(got, "No units on the roster") {
+	if !strings.Contains(got, "press n to train") || !strings.Contains(got, "No units on the roster") {
 		t.Errorf("an empty roster is unhelpful:\n%s", got)
 	}
-	if !strings.Contains(got, "No unit selected") {
-		t.Errorf("an order with nothing selected said nothing:\n%s", got)
+	// An order on an empty roster is not a question of the cursor, so it names
+	// the key that puts a unit there rather than sending the user to the shell.
+	if !strings.Contains(got, "No units yet - press n to train one") {
+		t.Errorf("an order with nothing to give it to did not name the way to fill the roster:\n%s", got)
+	}
+	if strings.Contains(got, "barracks train") {
+		t.Errorf("an empty roster still sends the user to the shell to train a unit:\n%s", got)
 	}
 }
 
@@ -515,6 +533,12 @@ var everyOverlay = [][]string{
 	{"u", "@pump", "y"},     // that plan being carried out
 	{"g", "y", "@pump"},     // an outcome
 	{"u", "@pump", "y", "@pump"},
+	{"n"},                                    // the train prompt
+	{"n", "enter"},                           // the same, refusing an empty name
+	{"n", "@type:no good", "enter", "@pump"}, // a name barracks refused
+	{"e"},                                    // the equip prompt
+	{"e", "@type:gh:", "enter"},              // a source refused before any fetch
+	{"e", "@type:gh:unit/kit", "enter", "@pump"}, // what it equipped
 }
 
 // The dossier counts things, and a count of one is not "1 skills".
@@ -693,13 +717,13 @@ func TestUnboundKeysDoNothingAndClaimNothing(t *testing.T) {
 			bound[name] = true
 		}
 	}
-	keys := []string{"t", "e", "x", "z", "w", "v"}
+	keys := []string{"t", "x", "z", "w", "v"}
 	for _, name := range widgetKeys(viewport.DefaultKeyMap()) {
 		if !bound[name] {
 			keys = append(keys, name)
 		}
 	}
-	if len(keys) <= 6 {
+	if len(keys) <= 5 {
 		t.Fatal("the viewport's keymap yielded no keys of its own, so its half of this was not driven")
 	}
 
@@ -847,7 +871,7 @@ func TestEveryAdvertisedKeyIsHandled(t *testing.T) {
 	// The list above is only worth anything if it really covered the new
 	// verbs; a binding dropped from both help views would otherwise be
 	// "checked" by never being reached.
-	for _, name := range []string{"s", "r", "g", "u", "L", "space"} {
+	for _, name := range []string{"s", "r", "g", "u", "L", "n", "e", "space"} {
 		if !seen[name] {
 			t.Errorf("%q is bound but appears in neither help view, so nothing advertises it", name)
 		}
@@ -1289,7 +1313,7 @@ func TestADirectoryOutsideTheRepositoryIsShownWhole(t *testing.T) {
 // move it has to be a no-op rather than an index out of range.
 func TestMovingOnAnEmptyRosterIsHarmless(t *testing.T) {
 	got := plain(Frame(cfgFor(fakeRecords{root: "/repo"}), 100, 24, "j", "k", "down", "up"))
-	if !strings.Contains(got, "no units trained") {
+	if !strings.Contains(got, "press n to train") {
 		t.Errorf("an empty roster did not survive the cursor keys:\n%s", got)
 	}
 }
@@ -1311,6 +1335,8 @@ func TestOrderVerbs(t *testing.T) {
 		orderGarrison: "Garrison",
 		orderUpgrade:  "Upgrade",
 		orderLaunch:   "Launch",
+		orderTrain:    "Train",
+		orderEquip:    "Equip",
 		orderNone:     "",
 	} {
 		if got := o.verb(); got != want {
@@ -1320,7 +1346,7 @@ func TestOrderVerbs(t *testing.T) {
 	// The in-flight card is on screen for as long as a fetch takes, so it says
 	// which order is taking it. Every order has to have an answer, and no two
 	// that do different things may share one.
-	for o := orderDeploy; o <= orderLaunch; o++ {
+	for o := orderDeploy; o <= orderEquip; o++ {
 		if o.working() == "" {
 			t.Errorf("order(%d) has no in-flight headline", o)
 		}
@@ -2127,7 +2153,7 @@ func TestNoCardCutsItsOwnProseInHalf(t *testing.T) {
 	cfg := withActions(cfgFor(r))
 
 	for _, w := range []int{60, 80, 100} {
-		for _, script := range [][]string{{"s"}, {"r"}, {"g"}, {"L"}, {"r", "g"}} {
+		for _, script := range [][]string{{"s"}, {"r"}, {"g"}, {"L"}, {"r", "g"}, {"n"}, {"e"}} {
 			frame := plain(Frame(cfg, w, 34, script...))
 			for _, line := range strings.Split(frame, "\n") {
 				if !strings.ContainsRune(line, '║') {
