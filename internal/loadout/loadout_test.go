@@ -605,3 +605,21 @@ func TestStripDetachesOneEntryAndLeavesTheRest(t *testing.T) {
 		t.Errorf("%d entries left", len(l.Equipment))
 	}
 }
+
+// TestSkillCountCountsASkillTwoSourcesProvideOnce holds the count to what the
+// deploy picker lists: two sources offering one skill install one directory.
+func TestSkillCountCountsASkillTwoSourcesProvideOnce(t *testing.T) {
+	src := func(raw string) source.Source {
+		s, err := source.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	l := &Loadout{Name: "dup"}
+	l.Equip(Equipment{Source: src("gh:owner/a"), Commit: "aaa", Skills: []string{"code-review", "security-audit"}})
+	l.Equip(Equipment{Source: src("gh:owner/b"), Commit: "bbb", Skills: []string{"code-review", "security-audit"}})
+	if l.SkillCount() != 2 {
+		t.Errorf("skill count = %d, want 2", l.SkillCount())
+	}
+}

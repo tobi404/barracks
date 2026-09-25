@@ -48,7 +48,9 @@ out. See [sending part of a loadout](./commands.md#sending-part-of-a-loadout) fo
 upgrade does with it. A deploy with nothing ticked in a list is refused on the card, naming
 which list is empty.
 
-`g` and `L` always deploy the whole loadout.
+`g` and `L` always deploy the whole loadout. `g`'s card names every agent the garrison will
+commit into and why - detected here, declared by the loadout, or recorded in `barracks.lock`
+for a loadout this repository already garrisoned - because those files are cloned by everyone.
 
 `u` shows you the plan first. It re-resolves every source and reports what carrying it
 through would change - the same body `barracks upgrade --dry-run` prints, because it is the

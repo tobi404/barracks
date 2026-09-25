@@ -104,6 +104,11 @@ func withMenus(cfg Config) Config {
 	cfg.Selection = func(*loadout.Loadout) ([]string, string, error) {
 		return []string{"claude"}, "detected in this repository", nil
 	}
+	// The longest agent name there is, so every card test that raises a
+	// garrison order has its destination wrapping rather than fitting by luck.
+	cfg.GarrisonTargets = func(*loadout.Loadout) ([]string, string, error) {
+		return []string{"claude", "agents"}, "detected in this repository", nil
+	}
 	cfg.Launchers = []Launcher{
 		{Command: "claude", Display: "Claude Code"},
 		{Command: "cursor-agent", Display: "Cursor"},
@@ -2127,5 +2132,83 @@ func TestAPartialDeploymentReadsDifferentlyFromAWholeOne(t *testing.T) {
 	dossier := frame[strings.Index(frame, "DEPLOYMENTS"):]
 	if !strings.Contains(dossier, "skill-0") {
 		t.Errorf("the dossier does not name the standing skill:\n%s", dossier)
+	}
+}
+
+// cardSentence is the prose inside the card in a frame, one space between rows,
+// so a sentence the card wrapped reads back whole.
+func cardSentence(frame string) string {
+	var rows []string
+	for _, line := range strings.Split(frame, "\n") {
+		first, last := strings.Index(line, "║"), strings.LastIndex(line, "║")
+		if first < 0 || last <= first {
+			continue
+		}
+		if row := strings.TrimSpace(line[first+len("║") : last]); row != "" {
+			rows = append(rows, row)
+		}
+	}
+	return strings.Join(rows, " ")
+}
+
+// TestTheGarrisonCardNamesWhereItWillCommit: those files are cloned by the
+// whole team, so where they go is on the card before y - whole, in the agents'
+// own names, on every terminal the roster claims to work on, and with the way
+// out still showing.
+func TestTheGarrisonCardNamesWhereItWillCommit(t *testing.T) {
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
+	cfg := withActions(cfgFor(r))
+	want := "Into: Claude Code, AGENTS.md agents (Codex, opencode, Cursor) (detected in this repository)."
+
+	for _, size := range [][2]int{{60, 24}, {80, 24}, {120, 40}, {80, 14}} {
+		w, h := size[0], size[1]
+		got := plain(Frame(cfg, w, h, "g"))
+		what := fmt.Sprintf("%dx%d", w, h)
+		fits(t, got, w, h, what)
+		if !strings.Contains(cardSentence(got), want) {
+			t.Errorf("%s: the garrison card does not say where it will commit:\n%s", what, got)
+		}
+		if !strings.Contains(got, "stand down") {
+			t.Errorf("%s: the card no longer says how to leave it:\n%s", what, got)
+		}
+	}
+
+	// A target the menu does not know is still named, by its ID, rather than
+	// dropped from the one list that says where files are going.
+	cfg.GarrisonTargets = func(*loadout.Loadout) ([]string, string, error) {
+		return []string{"claude", "emacs"}, "recorded in barracks.lock", nil
+	}
+	if got := cardSentence(plain(Frame(cfg, 120, 32, "g"))); !strings.Contains(got, "Into: Claude Code, emacs (recorded in barracks.lock).") {
+		t.Errorf("the card dropped or renamed an agent it does not know:\n%s", got)
+	}
+}
+
+// TestTheGarrisonCardRefusesWhereTheOrderWould: a loadout whose destination
+// barracks cannot work out is refused before the card opens, in the order's
+// own words, rather than offered with no destination named.
+func TestTheGarrisonCardRefusesWhereTheOrderWould(t *testing.T) {
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
+	cfg := withActions(cfgFor(r))
+	cfg.GarrisonTargets = func(*loadout.Loadout) ([]string, string, error) {
+		return nil, "", errors.New("loadout declares a target barracks does not know: emacs")
+	}
+	got := plain(Frame(cfg, 120, 32, "g"))
+	if !strings.Contains(got, "REFUSED") || !strings.Contains(got, "emacs") {
+		t.Errorf("a garrison barracks cannot place was offered anyway:\n%s", got)
+	}
+	if strings.Contains(got, "GARRISON ORDER") {
+		t.Errorf("the card opened over a refusal:\n%s", got)
+	}
+}
+
+// TestTheGarrisonDestinationGoesWithItsCard: where a garrison would commit is
+// the garrison card's alone, and is not left behind on the next card raised.
+func TestTheGarrisonDestinationGoesWithItsCard(t *testing.T) {
+	r := fakeRecords{root: "/repo/lab", loadouts: []*loadout.Loadout{unitLoadout("frontline", "a")}}
+	cfg := withActions(cfgFor(r))
+	for _, script := range [][]string{{"g", "n", "s"}, {"g", "n", "L"}} {
+		if got := plain(Frame(cfg, 120, 32, script...)); strings.Contains(got, "Into:") {
+			t.Errorf("%v: a garrison's destination outlived its card:\n%s", script, got)
+		}
 	}
 }

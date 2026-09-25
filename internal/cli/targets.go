@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/tobi404/barracks/internal/lease"
 	"github.com/tobi404/barracks/internal/loadout"
 	"github.com/tobi404/barracks/internal/spawn"
 	"github.com/tobi404/barracks/internal/target"
@@ -55,11 +57,48 @@ func (e *Env) selectTargets(ctx context.Context, l *loadout.Loadout, override []
 func (e *Env) selectTargetsFor(ctx context.Context, l *loadout.Loadout, override []string, global bool, launched []target.Target) (target.Selection, error) {
 	var detected []target.Target
 	if global {
-		detected = target.DetectGlobal(e.Getenv, e.Home)
+		detected = target.DetectGlobal(e.Getenv, e.Home, e.spawnedIn(lease.ScopeGlobal, ""))
 	} else if loc, err := e.scopeOf(ctx, false); err == nil && loc.Root != "" {
-		detected = target.Detect(loc.Root)
+		detected = e.detectIn(loc.Root)
 	}
 	return target.Select(override, l.Targets, detected, launched)
+}
+
+// detectIn is which agents the repository rooted at root shows signs of, with
+// barracks' own personal spawns taken out of the evidence.
+//
+// Every surface that says an agent is "present" asks here - the selection
+// above, `barracks targets` and the roster's picker - so none of them can mark
+// an agent present that a spawn would then not go to.
+func (e *Env) detectIn(root string) []target.Target {
+	return target.Detect(root, e.spawnedIn(lease.ScopeRepo, root))
+}
+
+// spawnedIn is the footprint the personal spawns in one scope left on disk:
+// every directory a lease records creating and every symlink it records. Those
+// are what target detection must not count, or a single `spawn --target cursor`
+// makes Cursor "detected" for every loadout after it - and a garrison that
+// falls through to detection then commits Cursor files for the whole team.
+//
+// Every record in scope counts, reaped or not: a directory barracks made is
+// barracks' own whether or not the lease holding it is still alive. A record
+// that cannot be read discounts nothing, which leaves detection exactly as it
+// was before any of this was discounted; the reaper is what reports it.
+func (e *Env) spawnedIn(scope lease.Scope, root string) target.Spawned {
+	leases, _ := e.leases.List()
+	made := map[string]bool{}
+	for _, l := range lease.FindInScope(leases, scope, root) {
+		for _, d := range l.CreatedDirs {
+			made[filepath.Clean(d)] = true
+		}
+		for _, link := range l.Links {
+			made[filepath.Clean(link.Path)] = true
+		}
+	}
+	if len(made) == 0 {
+		return nil
+	}
+	return func(path string) bool { return made[filepath.Clean(path)] }
 }
 
 // announceSelection says which agents were picked whenever the user did not say
@@ -258,7 +297,8 @@ skills, and the documentation those paths were read from.
 Pass one of these IDs to --target, or declare them on a loadout with
 barracks assign. A target marked "present here" already has its configuration
 directory in this repository, so a loadout declaring no targets would be
-installed into it.
+installed into it. A directory barracks created itself for a personal spawn
+does not count: one loadout's spawn does not decide where the others go.
 
   barracks targets`),
 		Args: cobra.NoArgs,
@@ -267,7 +307,7 @@ installed into it.
 
 			present := map[string]bool{}
 			if loc, err := env.scopeOf(cmd.Context(), false); err == nil && loc.Root != "" {
-				for _, t := range target.Detect(loc.Root) {
+				for _, t := range env.detectIn(loc.Root) {
 					present[t.ID] = true
 				}
 			}

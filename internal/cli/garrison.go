@@ -127,20 +127,52 @@ on this machine. Use barracks inspect to see whether a checkout needs it.`),
 // installing into an agent the repository already committed files for. Only an
 // explicit --target or the loadout's own declaration overrides that.
 func (e *Env) garrisonSelection(ctx context.Context, loc spawn.Location, l *loadout.Loadout, targetIDs []string) (target.Selection, error) {
-	sel, err := e.selectTargetsFor(ctx, l, targetIDs, false, nil)
+	c, err := e.garrisonChoice(ctx, loc, l, targetIDs)
 	if err != nil {
 		return target.Selection{}, err
+	}
+	if c.Recorded {
+		fmt.Fprintf(e.Out, "targets: %s (%s)\n", strings.Join(c.IDs(), ", "), c.Reason())
+		return c.Selection, nil
+	}
+	e.announceSelection(c.Selection)
+	return c.Selection, nil
+}
+
+// garrisonChoice is the decision garrisonSelection announces, without the
+// announcing. The roster's garrison card asks it for the destinations it shows
+// before anything is written, so the card and the order it confirms are one
+// answer rather than two that could drift apart.
+func (e *Env) garrisonChoice(ctx context.Context, loc spawn.Location, l *loadout.Loadout, targetIDs []string) (garrisonTargets, error) {
+	sel, err := e.selectTargetsFor(ctx, l, targetIDs, false, nil)
+	if err != nil {
+		return garrisonTargets{}, err
 	}
 	if existing := e.garrisonedTargets(loc.Root, l); len(existing) > 0 && len(targetIDs) == 0 && len(l.Targets) == 0 {
 		sel, err = e.selectTargetsFor(ctx, l, existing, false, nil)
 		if err != nil {
-			return target.Selection{}, err
+			return garrisonTargets{}, err
 		}
-		fmt.Fprintf(e.Out, "targets: %s (recorded in %s)\n", strings.Join(sel.IDs(), ", "), garrison.LockName)
-		return sel, nil
+		return garrisonTargets{Selection: sel, Recorded: true}, nil
 	}
-	e.announceSelection(sel)
-	return sel, nil
+	return garrisonTargets{Selection: sel}, nil
+}
+
+// garrisonTargets is where a garrison goes and why. Recorded means the
+// lockfile's own list for an existing garrison decided it, which is a reason
+// target.Selection has no word for: to the selection it looks like a list
+// somebody named.
+type garrisonTargets struct {
+	target.Selection
+	Recorded bool
+}
+
+// Reason is the selection's reason, or the lockfile when that is what decided.
+func (g garrisonTargets) Reason() string {
+	if g.Recorded {
+		return "recorded in " + garrison.LockName
+	}
+	return g.Selection.Reason()
 }
 
 // garrisonedTargets is the target list the lockfile records for a loadout.
@@ -273,8 +305,8 @@ Exits non-zero when anything does not match, so it can gate a build.`),
 				if !c.OK() {
 					state = fmt.Sprintf("%d %s", len(c.Findings), plural(len(c.Findings), "problem", "problems"))
 				}
-				fmt.Fprintf(env.Out, "%s  %d %s, %d %s  [%s]  %s\n",
-					g.Loadout, g.SkillCount(), plural(g.SkillCount(), "skill", "skills"),
+				fmt.Fprintf(env.Out, "%s  %s, %d %s  [%s]  %s\n",
+					g.Loadout, g.Strength(),
 					g.FileCount(), plural(g.FileCount(), "file", "files"),
 					strings.Join(g.Targets, ", "), state)
 				// The name above is a label; this is what the entry is really

@@ -338,7 +338,7 @@ func TestStripRefusesWhileASessionHoldsTheSpawn(t *testing.T) {
 // TestStripRefusesASpellingItCannotResolve: removal never guesses.
 func TestStripRefusesASpellingItCannotResolve(t *testing.T) {
 	h := newHarness(t)
-	h.equipped("frontend")
+	h.equipped("frontend", "--except", "react")
 	h.mustRun("equip", "frontend", h.src.Dir+"#main:skills/react")
 
 	cases := map[string]struct{ arg, want string }{
