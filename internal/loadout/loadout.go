@@ -187,13 +187,17 @@ func (l *Loadout) identsAt(idx []int) []string {
 	return out
 }
 
-// SkillCount is the number of skills recorded across every source.
+// SkillCount is the number of distinct skill names recorded across every
+// source. Two sources providing the same skill install one directory, so a
+// sum would count it twice and disagree with every list of the skills.
 func (l *Loadout) SkillCount() int {
-	n := 0
+	seen := map[string]bool{}
 	for _, e := range l.Equipment {
-		n += len(e.Skills)
+		for _, s := range e.Skills {
+			seen[s] = true
+		}
 	}
-	return n
+	return len(seen)
 }
 
 // ValidateName rejects names that would not be safe as a filename.

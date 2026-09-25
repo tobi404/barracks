@@ -295,8 +295,44 @@ func (m *Manifest) Rename(id, from, to string) bool {
 	return true
 }
 
-// SkillCount is how many skill directories this garrison holds.
-func (g *Garrison) SkillCount() int { return len(g.Skills) }
+// SkillCount is how many distinct skills this garrison holds. A skill
+// committed for two agents is one skill in two directories, so this is not
+// len(g.Skills) - that is SkillCount times AgentCount.
+func (g *Garrison) SkillCount() int {
+	seen := map[string]bool{}
+	for _, s := range g.Skills {
+		seen[s.Name] = true
+	}
+	return len(seen)
+}
+
+// AgentCount is how many agents' directories this garrison's skills landed in.
+func (g *Garrison) AgentCount() int {
+	seen := map[string]bool{}
+	for _, s := range g.Skills {
+		seen[s.Target] = true
+	}
+	return len(seen)
+}
+
+// Strength says how many skills the garrison holds and, when they were
+// committed for more than one agent, across how many: "6 skills x 2 agents".
+// The multiplicity is kept apart from the count so a two-agent garrison never
+// reads as twice the skills its loadout has.
+func (g *Garrison) Strength() string {
+	s := fmt.Sprintf("%d %s", g.SkillCount(), pluralize(g.SkillCount(), "skill", "skills"))
+	if a := g.AgentCount(); a > 1 {
+		s += fmt.Sprintf(" x %d agents", a)
+	}
+	return s
+}
+
+func pluralize(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
 
 // FileCount is how many files this garrison holds.
 func (g *Garrison) FileCount() int {

@@ -1150,3 +1150,24 @@ func TestADroppedSkillStillReportsWhatIsNestedInsideIt(t *testing.T) {
 		t.Errorf("it was destroyed instead: %q", got)
 	}
 }
+
+// TestAMultiAgentGarrisonCountsEachSkillOnce holds a garrison committed for
+// two agents to its loadout's skill count, with the multiplicity said apart.
+func TestAMultiAgentGarrisonCountsEachSkillOnce(t *testing.T) {
+	g := Garrison{Loadout: "frontend", Targets: []string{"claude", "cursor"}}
+	for _, target := range g.Targets {
+		for _, name := range []string{"react", "css", "hooks"} {
+			g.Skills = append(g.Skills, Skill{Name: name, Target: target, Files: []File{{Path: "SKILL.md"}}})
+		}
+	}
+	if g.SkillCount() != 3 || g.AgentCount() != 2 || g.FileCount() != 6 {
+		t.Errorf("counts = %d skills, %d agents, %d files; want 3, 2 and 6", g.SkillCount(), g.AgentCount(), g.FileCount())
+	}
+	if got := g.Strength(); got != "3 skills x 2 agents" {
+		t.Errorf("Strength = %q", got)
+	}
+	single := Garrison{Skills: []Skill{{Name: "react", Target: "claude"}}}
+	if got := single.Strength(); got != "1 skill" {
+		t.Errorf("single-agent Strength = %q", got)
+	}
+}

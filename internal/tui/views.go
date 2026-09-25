@@ -338,8 +338,7 @@ func (m *model) dossier(u unit, w int) string {
 	if u.Committed != nil {
 		fmt.Fprintf(&b, "  %s %s\n",
 			lipgloss.NewStyle().Foreground(m.th.held).Render("▣"),
-			m.th.body.Render(fmt.Sprintf("committed to this repository · %d %s",
-				u.Committed.SkillCount(), plural(u.Committed.SkillCount(), "skill", "skills"))))
+			m.th.body.Render("committed to this repository · "+u.Committed.Strength()))
 		fmt.Fprintf(&b, "     %s\n", m.th.faint.Render("barracks.lock · no lease, never reaped"))
 	}
 	for _, ls := range u.Here {
